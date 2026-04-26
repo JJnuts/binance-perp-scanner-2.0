@@ -1244,8 +1244,9 @@ def _find_gamma_flip(strike_df: pd.DataFrame) -> Optional[float]:
     if strike_df.empty:
         return None
     cumulative = strike_df["signed_gex"].cumsum()
-    sign = np.sign(cumulative.replace(0.0, np.nan)).fillna(method="ffill").fillna(method="bfill")
-    flip_points = sign.ne(sign.shift(1))
+    sign = np.sign(cumulative.replace(0.0, np.nan)).ffill().bfill()
+    prev_sign = sign.shift(1)
+    flip_points = prev_sign.notna() & sign.ne(prev_sign)
     candidates = strike_df.loc[flip_points]
     if not candidates.empty:
         return float(candidates.iloc[0]["strike"])
