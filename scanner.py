@@ -181,7 +181,9 @@ def _inject_app_styles():
             .block-container {{
                 padding-top: 2.2rem;
                 padding-bottom: 2.5rem;
-                max-width: 1500px;
+                max-width: 1820px;
+                padding-left: 2rem;
+                padding-right: 2rem;
             }}
 
             h1, h2, h3 {{
