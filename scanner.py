@@ -388,31 +388,6 @@ def _inject_app_styles():
                 background: rgba(17, 24, 17, 0.6);
             }}
 
-            .term-link-row {{
-                display: flex;
-                flex-wrap: wrap;
-                gap: 0.45rem;
-                margin: 0.4rem 0 0.8rem 0;
-            }}
-
-            .term-link {{
-                display: inline-block;
-                padding: 0.28rem 0.55rem;
-                border: 1px solid rgba(39, 50, 38, 0.85);
-                border-radius: 4px;
-                background: rgba(17, 24, 17, 0.88);
-                color: var(--app-accent);
-                text-decoration: none;
-                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-                font-size: 0.78rem;
-                line-height: 1.1;
-            }}
-
-            .term-link:hover {{
-                border-color: rgba(94, 111, 87, 0.9);
-                color: var(--app-accent);
-            }}
-
             hr {{
                 border-color: rgba(39, 50, 38, 0.75);
             }}
@@ -953,33 +928,12 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
     return fig
 
 
-def _slugify_term(term: str) -> str:
-    safe = "".join(ch.lower() if ch.isalnum() else "-" for ch in term)
-    return "-".join(part for part in safe.split("-") if part)
-
-
 def _render_term_guide():
-    st.subheader("Term Guide")
-    st.caption("Quick explanations for the score names and raw fields used in the screener table.")
-    links = "".join(
-        f'<a class="term-link" href="#term-{_slugify_term(term)}">{term}</a>'
-        for term, _ in TERM_GUIDE
-    )
-    st.markdown(f'<div class="term-link-row">{links}</div>', unsafe_allow_html=True)
-    for term, description in TERM_GUIDE:
-        slug = _slugify_term(term)
-        st.markdown(f'<div id="term-{slug}"></div>', unsafe_allow_html=True)
-        with st.expander(term):
+    with st.expander("TERM GUIDE"):
+        st.caption("Quick explanations for the score names and raw fields used in the screener table.")
+        for term, description in TERM_GUIDE:
+            st.markdown(f"**{term}**")
             st.write(description)
-
-
-def _render_term_quick_links():
-    st.caption("Jump to a term explanation:")
-    links = "".join(
-        f'<a class="term-link" href="#term-{_slugify_term(term)}">{term}</a>'
-        for term, _ in TERM_GUIDE
-    )
-    st.markdown(f'<div class="term-link-row">{links}</div>', unsafe_allow_html=True)
 
 
 def _candidate_symbols(
@@ -1622,8 +1576,6 @@ def main():
     _show_table(setups.head(top_n))
     st.divider()
     _render_term_guide()
-    st.divider()
-    _render_term_quick_links()
 
     with st.expander(f"Full screener ({len(df)} assets)"):
         _show_table(ranked_df)
