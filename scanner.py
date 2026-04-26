@@ -1040,20 +1040,10 @@ def _render_term_guide():
             cards = []
             for term, description in items:
                 cards.append(
-                    f"""
-                    <div class="term-guide-card">
-                        <div class="term-guide-title">{term}</div>
-                        <div class="term-guide-copy">{description}</div>
-                    </div>
-                    """
+                    f'<div class="term-guide-card"><div class="term-guide-title">{term}</div><div class="term-guide-copy">{description}</div></div>'
                 )
             sections.append(
-                f"""
-                <div class="term-guide-group">
-                    <div class="term-guide-group-title">{group_name}</div>
-                    <div class="term-guide-grid">{"".join(cards)}</div>
-                </div>
-                """
+                f'<div class="term-guide-group"><div class="term-guide-group-title">{group_name}</div><div class="term-guide-grid">{"".join(cards)}</div></div>'
             )
         st.markdown("".join(sections), unsafe_allow_html=True)
 
