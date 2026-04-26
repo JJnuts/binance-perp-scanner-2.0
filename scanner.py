@@ -1256,7 +1256,7 @@ def _find_gamma_flip(strike_df: pd.DataFrame) -> Optional[float]:
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
-    instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": False}, timeout=20)
+    instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": "false"}, timeout=20)
     summaries_raw = _get_deribit("public/get_book_summary_by_currency", params={"currency": "BTC", "kind": "option"}, timeout=20)
 
     instruments = pd.DataFrame(instruments_raw)
@@ -1519,7 +1519,13 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
 def _render_btc_options_cockpit(anchor_mode: str):
     status = st.empty()
     status.info("Building BTC options cockpit from public Deribit + Binance data...")
-    bundle = build_btc_options_cockpit(anchor_mode)
+    try:
+        bundle = build_btc_options_cockpit(anchor_mode)
+    except Exception as exc:
+        status.empty()
+        st.error(f"BTC options cockpit failed to load: {exc}")
+        st.caption("This page depends on live public Deribit and Binance endpoints. Try Force refresh in a moment.")
+        return
     status.empty()
     if "error" in bundle:
         st.error(str(bundle["error"]))
