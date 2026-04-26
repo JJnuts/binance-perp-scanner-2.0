@@ -100,6 +100,136 @@ APP_ACCENT = "#dfe7d8"
 BUBBLE_SIZE_MULTIPLIER = 10.5
 BUBBLE_SIZE_MIN = 4.0
 BUBBLE_SIZE_MAX = 34.0
+TERM_GUIDE = [
+    (
+        "Momentum",
+        "Primary low-timeframe score. It blends beta-adjusted alpha, raw relative strength vs BTC, volume expansion, trend structure, open-interest expansion, and funding quality into one 0-100 ranking.",
+    ),
+    (
+        "HTF Momentum",
+        "Higher-timeframe leadership score. It leans more heavily on 24H/72H/7D behavior, cleaner trend structure, and volatility-adjusted persistence rather than short-term ignition.",
+    ),
+    (
+        "Overext",
+        "Overextension score. Higher values mean the move is already stretched through VWAP distance, EMA extension, and recent acceleration, so continuation is more vulnerable to snapback.",
+    ),
+    (
+        "Setup",
+        "LTF setup score. This is momentum adjusted down by overextension, which helps surface strong names that are not already too crowded or late.",
+    ),
+    (
+        "HTF Setup",
+        "HTF setup score. Same idea as Setup, but built from the higher-timeframe leadership model instead of the lower-timeframe momentum model.",
+    ),
+    (
+        "Alpha Score",
+        "Percentile score of beta-adjusted outperformance vs BTC on the LTF blend. High values mean the coin is outperforming what its usual BTC sensitivity would imply.",
+    ),
+    (
+        "HTF Alpha",
+        "Percentile score of higher-timeframe beta-adjusted outperformance vs BTC. This helps identify leaders that stay strong even after filtering out the broader BTC move.",
+    ),
+    (
+        "Vol-Adj",
+        "Volatility-adjusted return score. It rewards returns that stay strong after accounting for how noisy the path was, which helps separate cleaner trends from chaotic moves.",
+    ),
+    (
+        "RS Score",
+        "Percentile score of raw relative strength vs BTC on the LTF blend. It answers whether the alt beat BTC without beta-adjusting for its usual behavior.",
+    ),
+    (
+        "HTF RS",
+        "Higher-timeframe raw relative strength vs BTC score. Useful for seeing which names have been leadership candidates over longer windows.",
+    ),
+    (
+        "Vol Score",
+        "Volume expansion score. It combines 1H volume ratio and 1H volume z-score to find names with both large and unusual participation.",
+    ),
+    (
+        "Trend Score",
+        "Low-timeframe trend-structure score based on price vs EMA20/36/50, EMA alignment, and positive VWAP bias.",
+    ),
+    (
+        "HTF Trend",
+        "Higher-timeframe trend-structure score. It puts more weight on sustained EMA structure and higher-timeframe VWAP position than on short bursts.",
+    ),
+    (
+        "OI Score",
+        "Open-interest expansion score. Higher values mean the move is being confirmed by OI growth rather than only drifting on price.",
+    ),
+    (
+        "Funding Score",
+        "Funding quality score. It rewards neutral-to-healthy funding and penalizes extreme crowding, since very stretched funding often means the move is late.",
+    ),
+    (
+        "Funding Trend",
+        "Funding trend quality score. It looks at cumulative funding and recent funding shift to tell whether the longer funding backdrop is still healthy or already overheated.",
+    ),
+    (
+        "RS 1H",
+        "Raw 1-hour relative strength vs BTC. Positive values mean the coin beat BTC over the last hour.",
+    ),
+    (
+        "RS 4H",
+        "Raw 4-hour relative strength vs BTC. This is one of the core short-term leadership windows in the LTF model.",
+    ),
+    (
+        "RS 24H",
+        "Raw 24-hour relative strength vs BTC. It helps distinguish a real move from a very short-lived spike.",
+    ),
+    (
+        "RS 72H",
+        "Raw 72-hour relative strength vs BTC. Mainly useful for the HTF side of the screener.",
+    ),
+    (
+        "Alpha 4H",
+        "4-hour beta-adjusted relative strength vs BTC. Positive values mean the coin beat what its normal BTC relationship would have predicted.",
+    ),
+    (
+        "Alpha 24H",
+        "24-hour beta-adjusted relative strength vs BTC. A cleaner measure of whether the coin’s move is genuinely special, not just high-beta follow-through.",
+    ),
+    (
+        "Alpha 72H",
+        "72-hour beta-adjusted relative strength vs BTC. This is more relevant for sustained higher-timeframe leadership.",
+    ),
+    (
+        "Vol Ratio",
+        "Current 1H quote volume divided by its recent baseline. It tells you whether the latest participation is large relative to normal.",
+    ),
+    (
+        "Vol Z",
+        "1H volume z-score. It measures how statistically unusual the latest volume is compared with recent history.",
+    ),
+    (
+        "OI 1H",
+        "1-hour open-interest change. Positive values mean new exposure is entering; negative values suggest exposure is being closed out.",
+    ),
+    (
+        "Funding",
+        "Latest funding rate on the perpetual contract. Mildly positive funding can be healthy, but extreme positive funding often signals crowding.",
+    ),
+    (
+        "Funding 7D",
+        "Cumulative recent funding backdrop. This helps show whether a contract has been persistently crowded over the past week.",
+    ),
+    (
+        "Funding Trend Raw",
+        "Change in the latest funding rate versus its recent baseline. It helps spot when funding is rapidly becoming more crowded or relaxing.",
+    ),
+    (
+        "24H Quote Vol",
+        "24-hour quote volume from Binance futures ticker data. This is one of the main liquidity gates used to keep thin markets out of the screener.",
+    ),
+    (
+        "24H Trades",
+        "24-hour trade count from Binance futures ticker data. This is another liquidity gate that helps exclude contracts with weak participation.",
+    ),
+    (
+        "OI Value",
+        "Estimated open-interest notional value. Higher values usually mean the contract is liquid enough to treat its signals more seriously.",
+    ),
+]
 
 
 def _make_session() -> requests.Session:
@@ -256,6 +386,31 @@ def _inject_app_styles():
                 border: 1px solid rgba(39, 50, 38, 0.78);
                 border-radius: 4px;
                 background: rgba(17, 24, 17, 0.6);
+            }}
+
+            .term-link-row {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.45rem;
+                margin: 0.4rem 0 0.8rem 0;
+            }}
+
+            .term-link {{
+                display: inline-block;
+                padding: 0.28rem 0.55rem;
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 4px;
+                background: rgba(17, 24, 17, 0.88);
+                color: var(--app-accent);
+                text-decoration: none;
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.78rem;
+                line-height: 1.1;
+            }}
+
+            .term-link:hover {{
+                border-color: rgba(94, 111, 87, 0.9);
+                color: var(--app-accent);
             }}
 
             hr {{
@@ -796,6 +951,35 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
     fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
     fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
     return fig
+
+
+def _slugify_term(term: str) -> str:
+    safe = "".join(ch.lower() if ch.isalnum() else "-" for ch in term)
+    return "-".join(part for part in safe.split("-") if part)
+
+
+def _render_term_guide():
+    st.subheader("Term Guide")
+    st.caption("Quick explanations for the score names and raw fields used in the screener table.")
+    links = "".join(
+        f'<a class="term-link" href="#term-{_slugify_term(term)}">{term}</a>'
+        for term, _ in TERM_GUIDE
+    )
+    st.markdown(f'<div class="term-link-row">{links}</div>', unsafe_allow_html=True)
+    for term, description in TERM_GUIDE:
+        slug = _slugify_term(term)
+        st.markdown(f'<div id="term-{slug}"></div>', unsafe_allow_html=True)
+        with st.expander(term):
+            st.write(description)
+
+
+def _render_term_quick_links():
+    st.caption("Jump to a term explanation:")
+    links = "".join(
+        f'<a class="term-link" href="#term-{_slugify_term(term)}">{term}</a>'
+        for term, _ in TERM_GUIDE
+    )
+    st.markdown(f'<div class="term-link-row">{links}</div>', unsafe_allow_html=True)
 
 
 def _candidate_symbols(
@@ -1436,6 +1620,10 @@ def main():
 
     st.subheader(f"Top {score_label.lower()} setups ({len(setups)} assets)")
     _show_table(setups.head(top_n))
+    st.divider()
+    _render_term_guide()
+    st.divider()
+    _render_term_quick_links()
 
     with st.expander(f"Full screener ({len(df)} assets)"):
         _show_table(ranked_df)
