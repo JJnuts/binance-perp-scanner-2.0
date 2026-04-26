@@ -616,8 +616,22 @@ def _show_table(df: pd.DataFrame):
         st.info("No assets match the current filters.")
         return
 
+    table_df = df[cols].copy()
+    percent_cols = [
+        "rs_1h",
+        "rs_4h",
+        "rs_24h",
+        "rs_72h",
+        "alpha_4h",
+        "alpha_24h",
+        "alpha_72h",
+        "oi_change_1h",
+    ]
+    for col in percent_cols:
+        table_df[col] = table_df[col].map(lambda value: f"{value:.2%}")
+
     st.dataframe(
-        df[cols].copy(),
+        table_df,
         use_container_width=True,
         height=420,
         column_config={
@@ -638,18 +652,18 @@ def _show_table(df: pd.DataFrame):
             "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f"),
             "funding_quality_score": st.column_config.NumberColumn("Funding Score", format="%.1f"),
             "funding_trend_quality_score": st.column_config.NumberColumn("Funding Trend", format="%.1f"),
-            "rs_1h": st.column_config.NumberColumn("RS 1H", format="%.2%"),
-            "rs_4h": st.column_config.NumberColumn("RS 4H", format="%.2%"),
-            "rs_24h": st.column_config.NumberColumn("RS 24H", format="%.2%"),
-            "rs_72h": st.column_config.NumberColumn("RS 72H", format="%.2%"),
-            "alpha_4h": st.column_config.NumberColumn("Alpha 4H", format="%.2%"),
-            "alpha_24h": st.column_config.NumberColumn("Alpha 24H", format="%.2%"),
-            "alpha_72h": st.column_config.NumberColumn("Alpha 72H", format="%.2%"),
+            "rs_1h": st.column_config.TextColumn("RS 1H"),
+            "rs_4h": st.column_config.TextColumn("RS 4H"),
+            "rs_24h": st.column_config.TextColumn("RS 24H"),
+            "rs_72h": st.column_config.TextColumn("RS 72H"),
+            "alpha_4h": st.column_config.TextColumn("Alpha 4H"),
+            "alpha_24h": st.column_config.TextColumn("Alpha 24H"),
+            "alpha_72h": st.column_config.TextColumn("Alpha 72H"),
             "vol_adj_24h": st.column_config.NumberColumn("Vol-Adj 24H", format="%.2f"),
             "vol_adj_72h": st.column_config.NumberColumn("Vol-Adj 72H", format="%.2f"),
             "volume_ratio_1h": st.column_config.NumberColumn("Vol Ratio", format="%.2f"),
             "volume_z_1h": st.column_config.NumberColumn("Vol Z", format="%.2f"),
-            "oi_change_1h": st.column_config.NumberColumn("OI 1H", format="%.2%"),
+            "oi_change_1h": st.column_config.TextColumn("OI 1H"),
             "funding_rate": st.column_config.NumberColumn("Funding", format="%.5f"),
             "funding_cumulative_7d": st.column_config.NumberColumn("Funding 7D", format="%.5f"),
             "funding_trend": st.column_config.NumberColumn("Funding Trend Raw", format="%.5f"),
