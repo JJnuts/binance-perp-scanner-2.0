@@ -230,6 +230,60 @@ TERM_GUIDE = [
         "Estimated open-interest notional value. Higher values usually mean the contract is liquid enough to treat its signals more seriously.",
     ),
 ]
+TERM_GUIDE_GROUPS = [
+    (
+        "Scores",
+        [
+            ("Momentum", "Primary LTF ranking. It blends alpha, RS vs BTC, volume, trend, OI, and funding quality into one 0-100 score."),
+            ("HTF Momentum", "Higher-timeframe leadership score. It favors cleaner 24H to 7D strength over short bursts."),
+            ("Overext", "Overextension score. Higher values mean the move is more stretched and vulnerable to snapback."),
+            ("Setup", "LTF setup score. It rewards strong momentum while penalizing names that already look too extended."),
+            ("HTF Setup", "HTF version of Setup. It starts from the higher-timeframe model instead of the LTF model."),
+            ("Alpha Score", "Percentile score of beta-adjusted outperformance vs BTC on the LTF blend."),
+            ("HTF Alpha", "Higher-timeframe beta-adjusted outperformance vs BTC. Good for spotting true leaders, not just BTC passengers."),
+            ("Vol-Adj", "Volatility-adjusted return score. It rewards strength that came with a cleaner path."),
+            ("RS Score", "Percentile score of raw relative strength vs BTC on the LTF blend."),
+            ("HTF RS", "Higher-timeframe raw relative strength vs BTC. Useful for sustained leadership."),
+            ("Vol Score", "Volume expansion score built from 1H volume ratio and 1H volume z-score."),
+            ("Trend Score", "LTF trend-structure score from EMA alignment and VWAP bias."),
+            ("HTF Trend", "HTF trend-structure score. It leans more on sustained EMA structure and higher-timeframe VWAP position."),
+            ("OI Score", "Open-interest expansion score. Higher values mean price strength is being confirmed by new exposure."),
+        ],
+    ),
+    (
+        "Raw RS / Alpha",
+        [
+            ("RS 1H", "Raw 1-hour relative strength vs BTC. Positive means the coin beat BTC over the last hour."),
+            ("RS 4H", "Raw 4-hour relative strength vs BTC. One of the core LTF leadership windows."),
+            ("RS 24H", "Raw 24-hour relative strength vs BTC. Useful for separating real moves from short spikes."),
+            ("RS 72H", "Raw 72-hour relative strength vs BTC. More relevant on the HTF side."),
+            ("Alpha 4H", "4-hour beta-adjusted RS vs BTC. Positive means the coin beat what its normal BTC sensitivity implied."),
+            ("Alpha 24H", "24-hour beta-adjusted RS vs BTC. A cleaner read on whether the move is genuinely special."),
+            ("Alpha 72H", "72-hour beta-adjusted RS vs BTC. Better for sustained higher-timeframe leadership."),
+        ],
+    ),
+    (
+        "Volume / OI",
+        [
+            ("Vol Ratio", "Current 1H quote volume divided by its recent baseline."),
+            ("Vol Z", "1H volume z-score. It shows how unusual the latest volume is vs recent history."),
+            ("OI 1H", "1-hour open-interest change. Positive means exposure is entering; negative means it is being closed."),
+        ],
+    ),
+    (
+        "Funding / Liquidity",
+        [
+            ("Funding Score", "Funding quality score. It prefers healthy funding and penalizes extreme crowding."),
+            ("Funding Trend", "Funding trend quality score from cumulative funding and recent funding shift."),
+            ("Funding", "Latest funding rate on the perpetual contract."),
+            ("Funding 7D", "Recent cumulative funding backdrop. Helpful for spotting persistent crowding."),
+            ("Funding Trend Raw", "Latest funding minus its recent baseline. Useful for seeing crowding accelerate or fade."),
+            ("24H Quote Vol", "24-hour quote volume from Binance futures ticker data. One of the main liquidity gates."),
+            ("24H Trades", "24-hour trade count from Binance futures ticker data. Helps exclude weakly traded contracts."),
+            ("OI Value", "Estimated open-interest notional value. Higher values usually mean a more liquid, trustworthy contract."),
+        ],
+    ),
+]
 
 
 def _make_session() -> requests.Session:
@@ -390,9 +444,15 @@ def _inject_app_styles():
 
             .term-guide-grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 0.85rem;
                 margin-top: 0.8rem;
+            }}
+
+            @media (max-width: 1100px) {{
+                .term-guide-grid {{
+                    grid-template-columns: minmax(0, 1fr);
+                }}
             }}
 
             .term-guide-card {{
@@ -416,6 +476,20 @@ def _inject_app_styles():
                 color: var(--app-muted);
                 font-size: 0.84rem;
                 line-height: 1.45;
+            }}
+
+            .term-guide-group {{
+                margin-top: 1rem;
+            }}
+
+            .term-guide-group-title {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.86rem;
+                font-weight: 700;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                margin: 0.2rem 0 0.65rem 0;
             }}
 
             hr {{
@@ -961,20 +1035,27 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
 def _render_term_guide():
     with st.expander("TERM GUIDE"):
         st.caption("Quick explanations for the score names and raw fields used in the screener table.")
-        cards = []
-        for term, description in TERM_GUIDE:
-            cards.append(
+        sections = []
+        for group_name, items in TERM_GUIDE_GROUPS:
+            cards = []
+            for term, description in items:
+                cards.append(
+                    f"""
+                    <div class="term-guide-card">
+                        <div class="term-guide-title">{term}</div>
+                        <div class="term-guide-copy">{description}</div>
+                    </div>
+                    """
+                )
+            sections.append(
                 f"""
-                <div class="term-guide-card">
-                    <div class="term-guide-title">{term}</div>
-                    <div class="term-guide-copy">{description}</div>
+                <div class="term-guide-group">
+                    <div class="term-guide-group-title">{group_name}</div>
+                    <div class="term-guide-grid">{"".join(cards)}</div>
                 </div>
                 """
             )
-        st.markdown(
-            f'<div class="term-guide-grid">{"".join(cards)}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown("".join(sections), unsafe_allow_html=True)
 
 
 def _candidate_symbols(
