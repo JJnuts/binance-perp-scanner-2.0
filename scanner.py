@@ -42,7 +42,47 @@ CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
 BTC_BUBBLE_LOOKBACK = 365
-BTC_BUBBLE_Z_WINDOW = 30
+BTC_BUBBLE_TIMEFRAMES = {
+    "1D": {
+        "label": "1D",
+        "rule": "1D",
+        "bars_per_day": 1,
+        "z_window": 30,
+        "binance_interval": "1d",
+        "coinbase_granularity": 86400,
+        "coinbase_rule": None,
+        "kraken_interval": 1440,
+        "kraken_rule": None,
+        "bybit_interval": "D",
+        "okx_bar": "1Dutc",
+    },
+    "12H": {
+        "label": "12H",
+        "rule": "12h",
+        "bars_per_day": 2,
+        "z_window": 60,
+        "binance_interval": "12h",
+        "coinbase_granularity": 3600,
+        "coinbase_rule": "12h",
+        "kraken_interval": 240,
+        "kraken_rule": "12h",
+        "bybit_interval": "720",
+        "okx_bar": "12H",
+    },
+    "8H": {
+        "label": "8H",
+        "rule": "8h",
+        "bars_per_day": 3,
+        "z_window": 90,
+        "binance_interval": "8h",
+        "coinbase_granularity": 3600,
+        "coinbase_rule": "8h",
+        "kraken_interval": 240,
+        "kraken_rule": "8h",
+        "bybit_interval": "480",
+        "okx_bar": "8H",
+    },
+}
 SPOT_COLOR_MAP = {
     "Neutral": "#8a8f9c",
     "Cooling": "#3b82f6",
@@ -459,11 +499,36 @@ def _classify_volume_temperature(zscore: float) -> str:
     return "Neutral"
 
 
-def _prepare_bubble_frame(df: pd.DataFrame) -> pd.DataFrame:
+def _interval_to_timedelta(interval: str) -> pd.Timedelta:
+    interval = interval.strip().lower()
+    if interval.endswith("d"):
+        return pd.Timedelta(days=int(interval[:-1]))
+    if interval.endswith("h"):
+        return pd.Timedelta(hours=int(interval[:-1]))
+    if interval.endswith("m"):
+        return pd.Timedelta(minutes=int(interval[:-1]))
+    raise ValueError(f"Unsupported interval: {interval}")
+
+
+def _resample_spot_frame(df: pd.DataFrame, rule: Optional[str], source_name: str) -> pd.DataFrame:
+    out = df.sort_values("ts").copy()
+    if rule:
+        out = (
+            out.set_index("ts")
+            .resample(rule)
+            .agg(close=("close", "last"), quote_volume=("quote_volume", "sum"))
+            .dropna()
+            .reset_index()
+        )
+    out["source"] = source_name
+    return out[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+
+
+def _prepare_bubble_frame(df: pd.DataFrame, z_window: int) -> pd.DataFrame:
     out = df.sort_values("ts").copy()
     out["volume_z"] = (
         out["quote_volume"]
-        .rolling(BTC_BUBBLE_Z_WINDOW, min_periods=10)
+        .rolling(z_window, min_periods=max(10, z_window // 3))
         .apply(
             lambda values: 0.0
             if float(np.std(values[:-1])) < 1e-12
@@ -481,34 +546,52 @@ def _prepare_bubble_frame(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _fetch_binance_spot_btc_daily(limit: int) -> pd.DataFrame:
-    raw = _get_json_url(
-        "https://api.binance.com/api/v3/klines",
-        params={"symbol": "BTCUSDT", "interval": "1d", "limit": limit},
-        timeout=20,
-    )
-    df = pd.DataFrame(raw)
-    df = df.iloc[:, [0, 4, 7]].copy()
-    df.columns = ["ts", "close", "quote_volume"]
+def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
+    interval_ms = int(_interval_to_timedelta(interval).total_seconds() * 1000)
+    chunks = []
+    end_time = None
+    remaining = limit
+    while remaining > 0:
+        chunk_limit = min(1000, remaining)
+        params = {"symbol": "BTCUSDT", "interval": interval, "limit": chunk_limit}
+        if end_time is not None:
+            params["endTime"] = end_time
+        raw = _get_json_url("https://api.binance.com/api/v3/klines", params=params, timeout=20)
+        if not raw:
+            break
+        chunk = pd.DataFrame(raw).iloc[:, [0, 4, 7]].copy()
+        chunk.columns = ["ts", "close", "quote_volume"]
+        chunks.append(chunk)
+        first_open = int(chunk.iloc[0]["ts"])
+        end_time = first_open - interval_ms
+        remaining -= len(chunk)
+        if len(chunk) < chunk_limit:
+            break
+
+    if not chunks:
+        return pd.DataFrame(columns=["ts", "close", "quote_volume", "source"])
+
+    df = pd.concat(chunks, ignore_index=True).drop_duplicates(subset=["ts"]).sort_values("ts")
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
     df["source"] = "Binance spot"
-    return df
+    return df[["ts", "close", "quote_volume", "source"]].tail(limit)
 
 
-def _fetch_coinbase_spot_btc_daily(limit: int) -> pd.DataFrame:
-    end = pd.Timestamp.utcnow().floor("D")
+def _fetch_coinbase_spot_btc(limit: int, granularity: int, rule: Optional[str]) -> pd.DataFrame:
+    end = pd.Timestamp.utcnow().floor("h")
     frames = []
-    chunk_days = 290
-    remaining = limit + 5
+    chunk_points = 290
+    remaining = limit + 8
     chunk_end = end
     while remaining > 0:
-        chunk_start = chunk_end - pd.Timedelta(days=min(chunk_days, remaining))
+        points = min(chunk_points, remaining)
+        chunk_start = chunk_end - pd.Timedelta(seconds=granularity * points)
         raw = _get_json_url(
             "https://api.exchange.coinbase.com/products/BTC-USD/candles",
             params={
-                "granularity": 86400,
+                "granularity": granularity,
                 "start": chunk_start.isoformat(),
                 "end": chunk_end.isoformat(),
             },
@@ -518,7 +601,7 @@ def _fetch_coinbase_spot_btc_daily(limit: int) -> pd.DataFrame:
         if raw:
             frames.append(pd.DataFrame(raw, columns=["ts", "low", "high", "open", "close", "base_volume"]))
         chunk_end = chunk_start
-        remaining -= chunk_days
+        remaining -= points
 
     if not frames:
         return pd.DataFrame(columns=["ts", "close", "quote_volume", "source"])
@@ -528,14 +611,14 @@ def _fetch_coinbase_spot_btc_daily(limit: int) -> pd.DataFrame:
     df["close"] = df["close"].astype(float)
     df["base_volume"] = df["base_volume"].astype(float)
     df["quote_volume"] = df["close"] * df["base_volume"]
-    df["source"] = "Coinbase spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+    df = _resample_spot_frame(df[["ts", "close", "quote_volume"]], rule, "Coinbase spot")
+    return df.tail(limit)
 
 
-def _fetch_bybit_spot_btc_daily(limit: int) -> pd.DataFrame:
+def _fetch_bybit_spot_btc(limit: int, interval: str) -> pd.DataFrame:
     raw = _get_json_url(
         "https://api.bybit.com/v5/market/kline",
-        params={"category": "spot", "symbol": "BTCUSDT", "interval": "D", "limit": limit},
+        params={"category": "spot", "symbol": "BTCUSDT", "interval": interval, "limit": min(limit, 1000)},
         timeout=20,
     )
     rows = raw.get("result", {}).get("list", [])
@@ -544,13 +627,13 @@ def _fetch_bybit_spot_btc_daily(limit: int) -> pd.DataFrame:
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
     df["source"] = "Bybit spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
 
 
-def _fetch_okx_spot_btc_daily(limit: int) -> pd.DataFrame:
+def _fetch_okx_spot_btc(limit: int, bar: str) -> pd.DataFrame:
     raw = _get_json_url(
         "https://www.okx.com/api/v5/market/history-candles",
-        params={"instId": "BTC-USDT", "bar": "1Dutc", "limit": limit},
+        params={"instId": "BTC-USDT", "bar": bar, "limit": min(limit, 300)},
         timeout=20,
     )
     rows = raw.get("data", [])
@@ -562,13 +645,13 @@ def _fetch_okx_spot_btc_daily(limit: int) -> pd.DataFrame:
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
     df["source"] = "OKX spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
 
 
-def _fetch_kraken_spot_btc_daily(limit: int) -> pd.DataFrame:
+def _fetch_kraken_spot_btc(limit: int, interval: int, rule: Optional[str]) -> pd.DataFrame:
     raw = _get_json_url(
         "https://api.kraken.com/0/public/OHLC",
-        params={"pair": "XBTUSD", "interval": 1440},
+        params={"pair": "XBTUSD", "interval": interval},
         timeout=20,
     )
     rows = raw.get("result", {}).get("XXBTZUSD", [])
@@ -581,41 +664,72 @@ def _fetch_kraken_spot_btc_daily(limit: int) -> pd.DataFrame:
     df["vwap"] = df["vwap"].astype(float)
     df["base_volume"] = df["base_volume"].astype(float)
     df["quote_volume"] = df["vwap"] * df["base_volume"]
-    df["source"] = "Kraken spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+    df = _resample_spot_frame(df[["ts", "close", "quote_volume"]], rule, "Kraken spot")
+    return df.tail(limit)
 
 
-def _safe_fetch_spot_source(name: str, fetcher, limit: int) -> tuple[str, Optional[pd.DataFrame], Optional[str]]:
+def _safe_fetch_spot_source(name: str, fetcher, *args) -> tuple[str, Optional[pd.DataFrame], Optional[str]]:
     try:
-        df = fetcher(limit)
+        df = fetcher(*args)
         if df.empty:
             return name, None, "Empty response"
-        return name, df.tail(limit), None
+        return name, df, None
     except Exception as exc:
         return name, None, str(exc)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def build_bitcoin_bubble_data(limit: int) -> dict[str, object]:
+def build_bitcoin_bubble_data(lookback_days: int, timeframe_key: str) -> dict[str, object]:
+    config = BTC_BUBBLE_TIMEFRAMES[timeframe_key]
+    display_bars = int(np.ceil(lookback_days * config["bars_per_day"]))
+    limit = display_bars + int(config["z_window"]) + 5
     fetchers = {
-        "binance": ("Binance spot", _fetch_binance_spot_btc_daily),
-        "coinbase": ("Coinbase spot", _fetch_coinbase_spot_btc_daily),
-        "bybit": ("Bybit spot", _fetch_bybit_spot_btc_daily),
-        "okx": ("OKX spot", _fetch_okx_spot_btc_daily),
-        "kraken": ("Kraken spot", _fetch_kraken_spot_btc_daily),
+        "binance": (
+            "Binance spot",
+            _fetch_binance_spot_btc,
+            limit,
+            str(config["binance_interval"]),
+        ),
+        "coinbase": (
+            "Coinbase spot",
+            _fetch_coinbase_spot_btc,
+            limit,
+            int(config["coinbase_granularity"]),
+            config["coinbase_rule"],
+        ),
+        "bybit": (
+            "Bybit spot",
+            _fetch_bybit_spot_btc,
+            limit,
+            str(config["bybit_interval"]),
+        ),
+        "okx": (
+            "OKX spot",
+            _fetch_okx_spot_btc,
+            limit,
+            str(config["okx_bar"]),
+        ),
+        "kraken": (
+            "Kraken spot",
+            _fetch_kraken_spot_btc,
+            limit,
+            int(config["kraken_interval"]),
+            config["kraken_rule"],
+        ),
     }
     sources: dict[str, pd.DataFrame] = {}
     errors: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=min(len(fetchers), MAX_WORKERS)) as ex:
         futures = {
-            ex.submit(_safe_fetch_spot_source, key, fetcher, limit): key
-            for key, (_, fetcher) in fetchers.items()
+            ex.submit(_safe_fetch_spot_source, key, fetcher, *args): key
+            for key, (_, fetcher, *args) in fetchers.items()
         }
         for fut in as_completed(futures):
             key = futures[fut]
             _, df, error = fut.result()
             if df is not None:
-                sources[key] = _prepare_bubble_frame(df)
+                prepared = _prepare_bubble_frame(df.tail(limit), int(config["z_window"]))
+                sources[key] = prepared.tail(display_bars)
             elif error:
                 errors[key] = error
 
@@ -630,7 +744,7 @@ def build_bitcoin_bubble_data(limit: int) -> dict[str, object]:
             .sort_values("ts")
         )
         aggregated["source"] = "Aggregated CEX spot"
-        aggregated = _prepare_bubble_frame(aggregated)
+        aggregated = _prepare_bubble_frame(aggregated.tail(limit), int(config["z_window"])).tail(display_bars)
 
     return {
         "sources": sources,
@@ -1073,10 +1187,13 @@ def _show_table(df: pd.DataFrame):
     )
 
 
-def _render_bitcoin_section(bitcoin_mode: str, bubble_lookback_days: int):
+def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_lookback_days: int):
+    config = BTC_BUBBLE_TIMEFRAMES[bubble_timeframe]
     progress_msg = st.empty()
-    progress_msg.info("Building daily Bitcoin spot volume bubble map across spot venues...")
-    bubble_bundle = build_bitcoin_bubble_data(bubble_lookback_days)
+    progress_msg.info(
+        f"Building {str(config['label']).lower()} Bitcoin spot volume bubble map with auto-adjusted volume temperature..."
+    )
+    bubble_bundle = build_bitcoin_bubble_data(bubble_lookback_days, bubble_timeframe)
     progress_msg.empty()
 
     sources = bubble_bundle["sources"]
@@ -1111,7 +1228,8 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_lookback_days: int):
     c4.metric("Volume State", str(latest["temperature"]))
 
     st.caption(
-        "Colors reflect 1d rolling spot-volume temperature from a 30-day z-score: "
+        f"Colors reflect {config['label']} spot-volume temperature from a rolling z-score window of "
+        f"{int(config['z_window'])} bars (about 30 days of context): "
         "blue = Cooling, gray = Neutral, pink = Heating, red = Overheating."
     )
     if source_key == "aggregated":
@@ -1127,7 +1245,8 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_lookback_days: int):
     st.plotly_chart(fig, use_container_width=True)
 
     detail_df = df[["ts", "close", "quote_volume", "volume_z", "temperature"]].copy()
-    detail_df["ts"] = detail_df["ts"].dt.strftime("%Y-%m-%d")
+    ts_format = "%Y-%m-%d" if bubble_timeframe == "1D" else "%Y-%m-%d %H:%M"
+    detail_df["ts"] = detail_df["ts"].dt.strftime(ts_format)
     st.dataframe(
         detail_df.sort_values("ts", ascending=False),
         use_container_width=True,
@@ -1179,6 +1298,7 @@ def main():
                 ],
                 index=0,
             )
+            bubble_timeframe = st.radio("Timeframe", ["1D", "12H", "8H"], index=0, horizontal=True)
             bubble_lookback_days = st.slider("Days to show", 90, 1000, 365, 30)
             st.caption("Aggregated view uses public spot data from Binance, Coinbase, Bybit, OKX, and Kraken when available.")
         else:
@@ -1235,7 +1355,7 @@ def main():
             st.caption("Data: Binance Futures public market data endpoints.")
 
     if section == "BITCOIN":
-        _render_bitcoin_section(bitcoin_mode, bubble_lookback_days)
+        _render_bitcoin_section(bitcoin_mode, bubble_timeframe, bubble_lookback_days)
         return
 
     with st.spinner("Fetching active Binance perpetuals..."):
