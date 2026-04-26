@@ -16,6 +16,7 @@ relative strength vs BTC, and overextension.
 - Pulls open interest statistics for liquidity gating and OI expansion scoring
 - Pulls funding history for cumulative funding and funding-trend quality
 - Produces separate Momentum, Overextension, and Setup rankings
+- Includes a separate `BITCOIN` section with 1d spot volume bubble maps
 - Auto-refreshes every 5 minutes
 - Runs without a Binance account or API key
 
@@ -57,6 +58,26 @@ Where:
 - Funding quality uses latest funding plus cumulative/trending funding history
 
 Overextension is tracked separately so strong names can still be flagged as hot.
+
+## Bitcoin Bubble Map
+
+The app also includes a `BITCOIN` section with three 1d bubble-map views:
+
+- Binance spot volume
+- Coinbase spot volume
+- Aggregated spot volume across the public venues that respond cleanly
+
+Bubble size reflects absolute BTC spot volume in USD terms. Color reflects a
+30-day rolling volume z-score:
+
+- `Cooling` = blue
+- `Neutral` = gray
+- `Heating` = pink
+- `Overheating` = red
+
+The aggregated view currently uses public spot data from Binance, Coinbase,
+Bybit, OKX, and Kraken when available. Hyperliquid spot is not included in this
+first version.
 
 ## Gate Defaults
 

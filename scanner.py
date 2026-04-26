@@ -41,6 +41,14 @@ REFRESH_MS = 5 * 60 * 1000
 CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
+BTC_BUBBLE_LOOKBACK = 365
+BTC_BUBBLE_Z_WINDOW = 30
+SPOT_COLOR_MAP = {
+    "Neutral": "#8a8f9c",
+    "Cooling": "#3b82f6",
+    "Heating": "#f472b6",
+    "Overheating": "#ef4444",
+}
 
 
 def _make_session() -> requests.Session:
@@ -64,6 +72,17 @@ _SESSION = _make_session()
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: int = API_TIMEOUT):
     response = _SESSION.get(f"{BINANCE_BASE}{path}", params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def _get_json_url(
+    url: str,
+    params: Optional[dict] = None,
+    headers: Optional[dict] = None,
+    timeout: int = API_TIMEOUT,
+):
+    response = _SESSION.get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -290,6 +309,229 @@ def _funding_trend_quality_score(funding_cumulative_z: pd.Series, funding_trend_
     cumulative_neutrality = 1.0 - (funding_cumulative_z.abs().clip(upper=3.0) / 3.0)
     trend_neutrality = 1.0 - (funding_trend_z.abs().clip(upper=3.0) / 3.0)
     return ((0.65 * cumulative_neutrality + 0.35 * trend_neutrality) * 100.0).clip(0.0, 100.0)
+
+
+def _classify_volume_temperature(zscore: float) -> str:
+    if zscore >= 2.0:
+        return "Overheating"
+    if zscore >= 1.0:
+        return "Heating"
+    if zscore <= -1.0:
+        return "Cooling"
+    return "Neutral"
+
+
+def _prepare_bubble_frame(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.sort_values("ts").copy()
+    out["volume_z"] = (
+        out["quote_volume"]
+        .rolling(BTC_BUBBLE_Z_WINDOW, min_periods=10)
+        .apply(
+            lambda values: 0.0
+            if float(np.std(values[:-1])) < 1e-12
+            else (values[-1] - float(np.mean(values[:-1]))) / float(np.std(values[:-1])),
+            raw=True,
+        )
+    )
+    out["volume_z"] = out["volume_z"].fillna(0.0)
+    out["temperature"] = out["volume_z"].map(_classify_volume_temperature)
+    scale_base = float(out["quote_volume"].median()) if not out.empty else 1.0
+    scale_base = max(scale_base, 1.0)
+    out["bubble_size"] = (np.sqrt(out["quote_volume"] / scale_base) * 18.0).clip(lower=6.0, upper=65.0)
+    return out
+
+
+def _fetch_binance_spot_btc_daily(limit: int) -> pd.DataFrame:
+    raw = _get_json_url(
+        "https://api.binance.com/api/v3/klines",
+        params={"symbol": "BTCUSDT", "interval": "1d", "limit": limit},
+        timeout=20,
+    )
+    df = pd.DataFrame(raw)
+    df = df.iloc[:, [0, 4, 7]].copy()
+    df.columns = ["ts", "close", "quote_volume"]
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+    df["close"] = df["close"].astype(float)
+    df["quote_volume"] = df["quote_volume"].astype(float)
+    df["source"] = "Binance spot"
+    return df
+
+
+def _fetch_coinbase_spot_btc_daily(limit: int) -> pd.DataFrame:
+    end = pd.Timestamp.utcnow().floor("D")
+    frames = []
+    chunk_days = 290
+    remaining = limit + 5
+    chunk_end = end
+    while remaining > 0:
+        chunk_start = chunk_end - pd.Timedelta(days=min(chunk_days, remaining))
+        raw = _get_json_url(
+            "https://api.exchange.coinbase.com/products/BTC-USD/candles",
+            params={
+                "granularity": 86400,
+                "start": chunk_start.isoformat(),
+                "end": chunk_end.isoformat(),
+            },
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
+        if raw:
+            frames.append(pd.DataFrame(raw, columns=["ts", "low", "high", "open", "close", "base_volume"]))
+        chunk_end = chunk_start
+        remaining -= chunk_days
+
+    if not frames:
+        return pd.DataFrame(columns=["ts", "close", "quote_volume", "source"])
+
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["ts"])
+    df["ts"] = pd.to_datetime(df["ts"], unit="s")
+    df["close"] = df["close"].astype(float)
+    df["base_volume"] = df["base_volume"].astype(float)
+    df["quote_volume"] = df["close"] * df["base_volume"]
+    df["source"] = "Coinbase spot"
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+
+
+def _fetch_bybit_spot_btc_daily(limit: int) -> pd.DataFrame:
+    raw = _get_json_url(
+        "https://api.bybit.com/v5/market/kline",
+        params={"category": "spot", "symbol": "BTCUSDT", "interval": "D", "limit": limit},
+        timeout=20,
+    )
+    rows = raw.get("result", {}).get("list", [])
+    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "base_volume", "quote_volume"])
+    df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
+    df["close"] = df["close"].astype(float)
+    df["quote_volume"] = df["quote_volume"].astype(float)
+    df["source"] = "Bybit spot"
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+
+
+def _fetch_okx_spot_btc_daily(limit: int) -> pd.DataFrame:
+    raw = _get_json_url(
+        "https://www.okx.com/api/v5/market/history-candles",
+        params={"instId": "BTC-USDT", "bar": "1Dutc", "limit": limit},
+        timeout=20,
+    )
+    rows = raw.get("data", [])
+    df = pd.DataFrame(
+        rows,
+        columns=["ts", "open", "high", "low", "close", "base_volume", "volume_ccy", "quote_volume", "confirm"],
+    )
+    df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
+    df["close"] = df["close"].astype(float)
+    df["quote_volume"] = df["quote_volume"].astype(float)
+    df["source"] = "OKX spot"
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+
+
+def _fetch_kraken_spot_btc_daily(limit: int) -> pd.DataFrame:
+    raw = _get_json_url(
+        "https://api.kraken.com/0/public/OHLC",
+        params={"pair": "XBTUSD", "interval": 1440},
+        timeout=20,
+    )
+    rows = raw.get("result", {}).get("XXBTZUSD", [])
+    df = pd.DataFrame(
+        rows,
+        columns=["ts", "open", "high", "low", "close", "vwap", "base_volume", "count"],
+    )
+    df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="s")
+    df["close"] = df["close"].astype(float)
+    df["vwap"] = df["vwap"].astype(float)
+    df["base_volume"] = df["base_volume"].astype(float)
+    df["quote_volume"] = df["vwap"] * df["base_volume"]
+    df["source"] = "Kraken spot"
+    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+
+
+def _safe_fetch_spot_source(name: str, fetcher, limit: int) -> tuple[str, Optional[pd.DataFrame], Optional[str]]:
+    try:
+        df = fetcher(limit)
+        if df.empty:
+            return name, None, "Empty response"
+        return name, df.tail(limit), None
+    except Exception as exc:
+        return name, None, str(exc)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def build_bitcoin_bubble_data(limit: int) -> dict[str, object]:
+    fetchers = {
+        "binance": ("Binance spot", _fetch_binance_spot_btc_daily),
+        "coinbase": ("Coinbase spot", _fetch_coinbase_spot_btc_daily),
+        "bybit": ("Bybit spot", _fetch_bybit_spot_btc_daily),
+        "okx": ("OKX spot", _fetch_okx_spot_btc_daily),
+        "kraken": ("Kraken spot", _fetch_kraken_spot_btc_daily),
+    }
+    sources: dict[str, pd.DataFrame] = {}
+    errors: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=min(len(fetchers), MAX_WORKERS)) as ex:
+        futures = {
+            ex.submit(_safe_fetch_spot_source, key, fetcher, limit): key
+            for key, (_, fetcher) in fetchers.items()
+        }
+        for fut in as_completed(futures):
+            key = futures[fut]
+            _, df, error = fut.result()
+            if df is not None:
+                sources[key] = _prepare_bubble_frame(df)
+            elif error:
+                errors[key] = error
+
+    aggregated = pd.DataFrame()
+    aggregate_keys = [key for key in ("binance", "coinbase", "bybit", "okx", "kraken") if key in sources]
+    if aggregate_keys:
+        frames = [sources[key][["ts", "close", "quote_volume"]] for key in aggregate_keys]
+        merged = pd.concat(frames, ignore_index=True)
+        aggregated = (
+            merged.groupby("ts", as_index=False)
+            .agg(close=("close", "mean"), quote_volume=("quote_volume", "sum"))
+            .sort_values("ts")
+        )
+        aggregated["source"] = "Aggregated CEX spot"
+        aggregated = _prepare_bubble_frame(aggregated)
+
+    return {
+        "sources": sources,
+        "aggregated": aggregated,
+        "errors": errors,
+        "aggregate_keys": aggregate_keys,
+    }
+
+
+def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
+    fig = px.scatter(
+        df,
+        x="ts",
+        y="close",
+        size="bubble_size",
+        size_max=60,
+        color="temperature",
+        color_discrete_map=SPOT_COLOR_MAP,
+        hover_name="source",
+        hover_data={
+            "ts": "|%Y-%m-%d",
+            "close": ":,.2f",
+            "quote_volume": ":,.0f",
+            "volume_z": ":.2f",
+            "bubble_size": False,
+        },
+        title=title,
+        template="plotly_dark",
+        height=700,
+    )
+    fig.update_traces(marker=dict(opacity=0.85, line=dict(width=0)))
+    fig.update_layout(
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font_color="white",
+        legend_title="Volume State",
+        title_font_size=17,
+        xaxis_title="Date",
+        yaxis_title="BTC Price (USD)",
+    )
+    return fig
 
 
 def _candidate_symbols(
@@ -675,6 +917,76 @@ def _show_table(df: pd.DataFrame):
     )
 
 
+def _render_bitcoin_section(bitcoin_mode: str, bubble_lookback_days: int):
+    progress_msg = st.empty()
+    progress_msg.info("Building daily Bitcoin spot volume bubble map across spot venues...")
+    bubble_bundle = build_bitcoin_bubble_data(bubble_lookback_days)
+    progress_msg.empty()
+
+    sources = bubble_bundle["sources"]
+    aggregated = bubble_bundle["aggregated"]
+    errors = bubble_bundle["errors"]
+    aggregate_keys = bubble_bundle["aggregate_keys"]
+
+    if bitcoin_mode == "BITCOIN spot volume bubblemap (based on Binance spot volume)":
+        source_key = "binance"
+        title = "BITCOIN Spot Volume Bubble Map - Binance"
+        df = sources.get(source_key, pd.DataFrame())
+    elif bitcoin_mode == "BITCOIN spot volume bubblemap (based on Coinbase spot volume)":
+        source_key = "coinbase"
+        title = "BITCOIN Spot Volume Bubble Map - Coinbase"
+        df = sources.get(source_key, pd.DataFrame())
+    else:
+        source_key = "aggregated"
+        title = "BITCOIN Spot Volume Bubble Map - Aggregated CEX"
+        df = aggregated
+
+    if df.empty:
+        st.error("No Bitcoin spot bubble-map data was available for this source right now.")
+        if errors:
+            st.caption("Source errors: " + " | ".join(f"{key}: {value}" for key, value in errors.items()))
+        st.stop()
+
+    latest = df.iloc[-1]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Bars", f"{len(df):,}")
+    c2.metric("Latest Price", f"{latest['close']:,.2f}")
+    c3.metric("Latest Spot Volume", f"{latest['quote_volume']:,.0f}")
+    c4.metric("Volume State", str(latest["temperature"]))
+
+    st.caption(
+        "Colors reflect 1d rolling spot-volume temperature from a 30-day z-score: "
+        "blue = Cooling, gray = Neutral, pink = Heating, red = Overheating."
+    )
+    if source_key == "aggregated":
+        st.caption(
+            "Aggregated view currently sums public spot data from: "
+            + ", ".join(key.title() for key in aggregate_keys)
+            + ". Hyperliquid spot is not included in this first version."
+        )
+    elif source_key in errors:
+        st.caption(f"Fetch note for {source_key}: {errors[source_key]}")
+
+    fig = _build_bitcoin_bubble_chart(df, title)
+    st.plotly_chart(fig, use_container_width=True)
+
+    detail_df = df[["ts", "close", "quote_volume", "volume_z", "temperature"]].copy()
+    detail_df["ts"] = detail_df["ts"].dt.strftime("%Y-%m-%d")
+    st.dataframe(
+        detail_df.sort_values("ts", ascending=False),
+        use_container_width=True,
+        height=360,
+        column_config={
+            "ts": st.column_config.TextColumn("Date"),
+            "close": st.column_config.NumberColumn("BTC Price", format="%.2f"),
+            "quote_volume": st.column_config.NumberColumn("Spot Volume (USD)", format="%.0f"),
+            "volume_z": st.column_config.NumberColumn("Volume Z", format="%.2f"),
+            "temperature": st.column_config.TextColumn("State"),
+        },
+        hide_index=True,
+    )
+
+
 def main():
     st.set_page_config(
         page_title="Binance Perp Scanner 2.0",
@@ -697,57 +1009,77 @@ def main():
             st.rerun()
 
         st.divider()
-        st.subheader("Liquidity gates")
-        min_quote_volume = st.number_input(
-            "Min 24H quote volume (USDT)",
-            min_value=0.0,
-            value=10_000_000.0,
-            step=1_000_000.0,
-            format="%.0f",
-        )
-        min_trades = st.number_input(
-            "Min 24H trades",
-            min_value=0.0,
-            value=15_000.0,
-            step=1_000.0,
-            format="%.0f",
-        )
-        min_oi_value = st.number_input(
-            "Min open interest value",
-            min_value=0.0,
-            value=5_000_000.0,
-            step=500_000.0,
-            format="%.0f",
-        )
-        st.caption("Balanced defaults: 10M quote volume, 15k trades, 5M open interest.")
+        section = st.radio("Section", ["Altcoins", "BITCOIN"], index=0)
 
-        st.divider()
-        st.subheader("Setup filters")
-        scoring_mode = st.radio(
-            "Scoring mode",
-            ["LTF Momentum", "HTF Leadership"],
-            index=0,
-            help="LTF favors 1H/4H/24H ignition. HTF favors 24H/72H/7D leadership and cleaner trends.",
-        )
-        min_momentum_score = st.slider("Min momentum score", 0, 100, 70, 1)
-        max_overextension_score = st.slider("Max overextension score", 0, 100, 65, 1)
-        top_n = st.slider("Rows to show", 10, 100, 30, 5)
+        if section == "BITCOIN":
+            st.subheader("BITCOIN")
+            bitcoin_mode = st.radio(
+                "BITCOIN view",
+                [
+                    "BITCOIN spot volume bubblemap (based on Binance spot volume)",
+                    "BITCOIN spot volume bubblemap (based on Coinbase spot volume)",
+                    "BITCOIN spot volume bubblemap (aggregated - across all CEX and Hyperliquid)",
+                ],
+                index=0,
+            )
+            bubble_lookback_days = st.slider("Days to show", 90, 1000, 365, 30)
+            st.caption("Aggregated view uses public spot data from Binance, Coinbase, Bybit, OKX, and Kraken when available.")
+        else:
+            st.subheader("Liquidity gates")
+            min_quote_volume = st.number_input(
+                "Min 24H quote volume (USDT)",
+                min_value=0.0,
+                value=10_000_000.0,
+                step=1_000_000.0,
+                format="%.0f",
+            )
+            min_trades = st.number_input(
+                "Min 24H trades",
+                min_value=0.0,
+                value=15_000.0,
+                step=1_000.0,
+                format="%.0f",
+            )
+            min_oi_value = st.number_input(
+                "Min open interest value",
+                min_value=0.0,
+                value=5_000_000.0,
+                step=500_000.0,
+                format="%.0f",
+            )
+            st.caption("Balanced defaults: 10M quote volume, 15k trades, 5M open interest.")
 
-        st.divider()
-        st.subheader("View mode")
-        view = st.radio(
-            "Chart",
-            [
-                "Momentum vs Overextension",
-                "RS 4H vs RS 24H",
-                "Volume vs OI Expansion",
-            ],
-            index=0,
-        )
+            st.divider()
+            st.subheader("Setup filters")
+            scoring_mode = st.radio(
+                "Scoring mode",
+                ["LTF Momentum", "HTF Leadership"],
+                index=0,
+                help="LTF favors 1H/4H/24H ignition. HTF favors 24H/72H/7D leadership and cleaner trends.",
+            )
+            min_momentum_score = st.slider("Min momentum score", 0, 100, 70, 1)
+            max_overextension_score = st.slider("Max overextension score", 0, 100, 65, 1)
+            top_n = st.slider("Rows to show", 10, 100, 30, 5)
 
-        st.divider()
-        st.caption("Universe excludes BTCUSDT by design.")
-        st.caption("Data: Binance Futures public market data endpoints.")
+            st.divider()
+            st.subheader("View mode")
+            view = st.radio(
+                "Chart",
+                [
+                    "Momentum vs Overextension",
+                    "RS 4H vs RS 24H",
+                    "Volume vs OI Expansion",
+                ],
+                index=0,
+            )
+
+            st.divider()
+            st.caption("Universe excludes BTCUSDT by design.")
+            st.caption("Data: Binance Futures public market data endpoints.")
+
+    if section == "BITCOIN":
+        _render_bitcoin_section(bitcoin_mode, bubble_lookback_days)
+        return
 
     with st.spinner("Fetching active Binance perpetuals..."):
         try:
