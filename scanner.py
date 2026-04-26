@@ -1078,17 +1078,22 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
 def _fetch_deribit_option_ticker(instrument_name: str) -> dict[str, object]:
     payload = _get_deribit("public/ticker", params={"instrument_name": instrument_name}, timeout=12)
     greeks = payload.get("greeks", {}) if isinstance(payload, dict) else {}
+    underlying_price = 0.0
+    if isinstance(payload, dict):
+        underlying_price = _safe_float(payload.get("underlying_price"))
+        if underlying_price <= 0.0:
+            underlying_price = _safe_float(payload.get("index_price"))
     return {
         "instrument_name": instrument_name,
-        "underlying_price": float(payload.get("underlying_price", 0.0) or 0.0),
-        "mark_iv": float(payload.get("mark_iv", 0.0) or 0.0),
-        "bid_iv": float(payload.get("bid_iv", 0.0) or 0.0),
-        "ask_iv": float(payload.get("ask_iv", 0.0) or 0.0),
-        "delta": float(greeks.get("delta", 0.0) or 0.0),
-        "gamma": float(greeks.get("gamma", 0.0) or 0.0),
-        "vega": float(greeks.get("vega", 0.0) or 0.0),
-        "theta": float(greeks.get("theta", 0.0) or 0.0),
-        "last_price": float(payload.get("last_price", 0.0) or 0.0),
+        "underlying_price": underlying_price,
+        "mark_iv": _safe_float(payload.get("mark_iv") if isinstance(payload, dict) else 0.0),
+        "bid_iv": _safe_float(payload.get("bid_iv") if isinstance(payload, dict) else 0.0),
+        "ask_iv": _safe_float(payload.get("ask_iv") if isinstance(payload, dict) else 0.0),
+        "delta": _safe_float(greeks.get("delta")),
+        "gamma": _safe_float(greeks.get("gamma")),
+        "vega": _safe_float(greeks.get("vega")),
+        "theta": _safe_float(greeks.get("theta")),
+        "last_price": _safe_float(payload.get("last_price") if isinstance(payload, dict) else 0.0),
     }
 
 
@@ -1316,7 +1321,17 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     if options_df.empty:
         return {"error": "Options universe could not be merged with Deribit greeks."}
 
-    spot = float(options_df["underlying_price"].replace(0.0, np.nan).median())
+    for col in ["underlying_price", "mark_iv", "bid_iv", "ask_iv", "delta", "gamma", "vega", "theta", "last_price"]:
+        if col not in options_df.columns:
+            options_df[col] = 0.0
+
+    perp_snapshot = _fetch_binance_btc_perp_snapshot()
+    fallback_spot = _safe_float(perp_snapshot.get("index_price")) or _safe_float(perp_snapshot.get("mark_price"))
+    spot_series = options_df["underlying_price"].replace(0.0, np.nan)
+    spot = float(spot_series.median()) if not spot_series.dropna().empty else fallback_spot
+    if spot <= 0.0:
+        return {"error": "Could not determine a BTC spot reference from Deribit or Binance."}
+
     options_df["gex_abs"] = (
         options_df["gamma"].abs()
         * options_df["open_interest"]
@@ -1376,7 +1391,6 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
 
     klines = _fetch_binance_btc_perp_klines()
     oi_hist = _fetch_binance_btc_open_interest_hist()
-    perp_snapshot = _fetch_binance_btc_perp_snapshot()
     avwap_df, anchor_ts = _build_anchored_vwap_frame(klines, anchor_mode)
     sweeps = _detect_recent_sweeps(avwap_df, oi_hist)
 
