@@ -14,6 +14,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from requests.adapters import HTTPAdapter
@@ -24,6 +25,7 @@ warnings.filterwarnings("ignore")
 
 
 BINANCE_BASE = "https://fapi.binance.com"
+DERIBIT_BASE = "https://www.deribit.com/api/v2"
 INTERVAL = "1h"
 CANDLE_LIMIT = 240
 VWAP_FAST = 8
@@ -42,6 +44,9 @@ CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
 BTC_BUBBLE_LOOKBACK = 365
+BTC_OPTIONS_MAX_CONTRACTS = 180
+BTC_OPTIONS_MAX_DAYS = 120
+BTC_OPTIONS_KLINE_LIMIT = 576
 BTC_BUBBLE_TIMEFRAMES = {
     "1D": {
         "label": "1D",
@@ -320,6 +325,13 @@ def _get_json_url(
     response = _SESSION.get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
+
+
+def _get_deribit(method: str, params: Optional[dict] = None, timeout: int = API_TIMEOUT):
+    response = _get_json_url(f"{DERIBIT_BASE}/{method}", params=params, timeout=timeout)
+    if isinstance(response, dict) and "result" in response:
+        return response["result"]
+    return response
 
 
 def _inject_app_styles():
@@ -1063,6 +1075,542 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
     return fig
 
 
+def _fetch_deribit_option_ticker(instrument_name: str) -> dict[str, object]:
+    payload = _get_deribit("public/ticker", params={"instrument_name": instrument_name}, timeout=12)
+    greeks = payload.get("greeks", {}) if isinstance(payload, dict) else {}
+    return {
+        "instrument_name": instrument_name,
+        "underlying_price": float(payload.get("underlying_price", 0.0) or 0.0),
+        "mark_iv": float(payload.get("mark_iv", 0.0) or 0.0),
+        "bid_iv": float(payload.get("bid_iv", 0.0) or 0.0),
+        "ask_iv": float(payload.get("ask_iv", 0.0) or 0.0),
+        "delta": float(greeks.get("delta", 0.0) or 0.0),
+        "gamma": float(greeks.get("gamma", 0.0) or 0.0),
+        "vega": float(greeks.get("vega", 0.0) or 0.0),
+        "theta": float(greeks.get("theta", 0.0) or 0.0),
+        "last_price": float(payload.get("last_price", 0.0) or 0.0),
+    }
+
+
+def _safe_fetch_deribit_option_ticker(instrument_name: str) -> Optional[dict[str, object]]:
+    try:
+        return _fetch_deribit_option_ticker(instrument_name)
+    except Exception:
+        return None
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _fetch_binance_btc_perp_klines(interval: str = "5m", limit: int = BTC_OPTIONS_KLINE_LIMIT) -> pd.DataFrame:
+    raw = _get_json("/fapi/v1/klines", params={"symbol": BTC_SYMBOL, "interval": interval, "limit": limit}, timeout=20)
+    df = pd.DataFrame(
+        raw,
+        columns=[
+            "ts",
+            "open",
+            "high",
+            "low",
+            "close",
+            "base_vol",
+            "close_ts",
+            "quote_vol",
+            "trades",
+            "taker_buy_base",
+            "taker_buy_quote",
+            "ignore",
+        ],
+    )
+    for col in ["open", "high", "low", "close", "base_vol", "quote_vol", "taker_buy_base", "taker_buy_quote"]:
+        df[col] = df[col].astype(float)
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_localize(None)
+    df["trades"] = df["trades"].astype(int)
+    return df
+
+
+def _fetch_binance_btc_open_interest_hist(period: str = "5m", limit: int = 100) -> pd.DataFrame:
+    raw = _get_json("/futures/data/openInterestHist", params={"symbol": BTC_SYMBOL, "period": period, "limit": limit}, timeout=20)
+    df = pd.DataFrame(raw)
+    if df.empty:
+        return pd.DataFrame(columns=["ts", "oi_contracts", "oi_value"])
+    df["ts"] = pd.to_datetime(df["timestamp"].astype(np.int64), unit="ms", utc=True).dt.tz_localize(None)
+    df["oi_contracts"] = df["sumOpenInterest"].astype(float)
+    df["oi_value"] = df["sumOpenInterestValue"].astype(float)
+    return df[["ts", "oi_contracts", "oi_value"]].sort_values("ts")
+
+
+def _fetch_binance_btc_perp_snapshot() -> dict[str, float]:
+    premium = _get_json("/fapi/v1/premiumIndex", params={"symbol": BTC_SYMBOL}, timeout=20)
+    open_interest = _get_json("/fapi/v1/openInterest", params={"symbol": BTC_SYMBOL}, timeout=20)
+    return {
+        "mark_price": _safe_float(premium.get("markPrice")),
+        "index_price": _safe_float(premium.get("indexPrice")),
+        "last_funding_rate": _safe_float(premium.get("lastFundingRate")),
+        "next_funding_time": _safe_float(premium.get("nextFundingTime")),
+        "open_interest_contracts": _safe_float(open_interest.get("openInterest")),
+    }
+
+
+def _choose_anchor_timestamp(df: pd.DataFrame, anchor_mode: str) -> pd.Timestamp:
+    ts = df["ts"]
+    latest = ts.iloc[-1]
+    if anchor_mode == "Monthly Open":
+        candidate = latest.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        valid = df[df["ts"] >= candidate]
+        return valid["ts"].iloc[0] if not valid.empty else ts.iloc[0]
+    if anchor_mode == "Prior 24H High":
+        window = df.iloc[:-1].tail(min(288, max(50, len(df) // 2)))
+        return window.loc[window["high"].idxmax(), "ts"] if not window.empty else ts.iloc[0]
+    if anchor_mode == "Prior 24H Low":
+        window = df.iloc[:-1].tail(min(288, max(50, len(df) // 2)))
+        return window.loc[window["low"].idxmin(), "ts"] if not window.empty else ts.iloc[0]
+
+    weekly_candidate = latest.normalize() - pd.Timedelta(days=latest.weekday())
+    valid = df[df["ts"] >= weekly_candidate]
+    return valid["ts"].iloc[0] if not valid.empty else ts.iloc[0]
+
+
+def _build_anchored_vwap_frame(df: pd.DataFrame, anchor_mode: str) -> tuple[pd.DataFrame, pd.Timestamp]:
+    out = df.sort_values("ts").copy()
+    anchor_ts = _choose_anchor_timestamp(out, anchor_mode)
+    anchor_mask = out["ts"] >= anchor_ts
+    subset = out.loc[anchor_mask].copy()
+    tp = (subset["high"] + subset["low"] + subset["close"]) / 3.0
+    cum_vol = subset["base_vol"].cumsum().replace(0.0, np.nan)
+    subset["avwap"] = (tp * subset["base_vol"]).cumsum() / cum_vol
+    subset["anchor_std"] = subset["close"].expanding().std().fillna(0.0)
+    subset["band_1_up"] = subset["avwap"] + subset["anchor_std"]
+    subset["band_1_dn"] = subset["avwap"] - subset["anchor_std"]
+    subset["band_2_up"] = subset["avwap"] + 2.0 * subset["anchor_std"]
+    subset["band_2_dn"] = subset["avwap"] - 2.0 * subset["anchor_std"]
+    subset["volume_z"] = (
+        subset["quote_vol"]
+        .rolling(20, min_periods=8)
+        .apply(
+            lambda values: 0.0
+            if float(np.std(values[:-1])) < 1e-12
+            else (values[-1] - float(np.mean(values[:-1]))) / float(np.std(values[:-1])),
+            raw=True,
+        )
+        .fillna(0.0)
+    )
+    subset["taker_imbalance"] = np.where(
+        subset["quote_vol"] > 0,
+        ((2.0 * subset["taker_buy_quote"]) - subset["quote_vol"]) / subset["quote_vol"],
+        0.0,
+    )
+    return subset, anchor_ts
+
+
+def _detect_recent_sweeps(price_df: pd.DataFrame, oi_hist: pd.DataFrame) -> pd.DataFrame:
+    df = price_df.copy()
+    if not oi_hist.empty:
+        df = pd.merge_asof(df.sort_values("ts"), oi_hist.sort_values("ts"), on="ts", direction="backward")
+        df["oi_value_change"] = df["oi_value"].pct_change().fillna(0.0)
+    else:
+        df["oi_value_change"] = 0.0
+    df["prev_high_20"] = df["high"].shift(1).rolling(20).max()
+    df["prev_low_20"] = df["low"].shift(1).rolling(20).min()
+    df["body"] = (df["close"] - df["open"]).abs()
+    df["upper_wick"] = df["high"] - df[["open", "close"]].max(axis=1)
+    df["lower_wick"] = df[["open", "close"]].min(axis=1) - df["low"]
+    upside = (
+        (df["high"] > df["prev_high_20"])
+        & (df["close"] < df["prev_high_20"])
+        & (df["upper_wick"] > (df["body"] * 1.2))
+        & (df["volume_z"] > 1.2)
+    )
+    downside = (
+        (df["low"] < df["prev_low_20"])
+        & (df["close"] > df["prev_low_20"])
+        & (df["lower_wick"] > (df["body"] * 1.2))
+        & (df["volume_z"] > 1.2)
+    )
+    sweeps = df[upside | downside].copy()
+    if sweeps.empty:
+        return pd.DataFrame(columns=["ts", "direction", "close", "volume_z", "taker_imbalance", "oi_value_change", "broken_level"])
+    sweeps["direction"] = np.where(upside.loc[sweeps.index], "Up-sweep / stop-run risk", "Down-sweep / squeeze risk")
+    sweeps["broken_level"] = np.where(upside.loc[sweeps.index], sweeps["prev_high_20"], sweeps["prev_low_20"])
+    return sweeps[["ts", "direction", "close", "volume_z", "taker_imbalance", "oi_value_change", "broken_level"]].tail(8)
+
+
+def _find_gamma_flip(strike_df: pd.DataFrame) -> Optional[float]:
+    if strike_df.empty:
+        return None
+    cumulative = strike_df["signed_gex"].cumsum()
+    sign = np.sign(cumulative.replace(0.0, np.nan)).fillna(method="ffill").fillna(method="bfill")
+    flip_points = sign.ne(sign.shift(1))
+    candidates = strike_df.loc[flip_points]
+    if not candidates.empty:
+        return float(candidates.iloc[0]["strike"])
+    idx = (cumulative.abs()).idxmin()
+    return float(strike_df.loc[idx, "strike"])
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
+    instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": False}, timeout=20)
+    summaries_raw = _get_deribit("public/get_book_summary_by_currency", params={"currency": "BTC", "kind": "option"}, timeout=20)
+
+    instruments = pd.DataFrame(instruments_raw)
+    summaries = pd.DataFrame(summaries_raw)
+    if instruments.empty or summaries.empty:
+        return {"error": "No Deribit BTC options data returned."}
+
+    instruments = instruments.rename(columns={"option_type": "option_type_meta"})
+    merged = summaries.merge(
+        instruments[
+            [
+                "instrument_name",
+                "expiration_timestamp",
+                "strike",
+                "option_type_meta",
+                "contract_size",
+            ]
+        ],
+        on="instrument_name",
+        how="left",
+    )
+    now_ms = pd.Timestamp.utcnow().value // 10**6
+    max_expiry_ms = now_ms + int(pd.Timedelta(days=BTC_OPTIONS_MAX_DAYS).total_seconds() * 1000)
+    merged = merged[
+        (merged["expiration_timestamp"].fillna(0).astype(np.int64) >= now_ms)
+        & (merged["expiration_timestamp"].fillna(0).astype(np.int64) <= max_expiry_ms)
+        & (merged["open_interest"].fillna(0).astype(float) > 0)
+    ].copy()
+    merged["expiration_ts"] = pd.to_datetime(merged["expiration_timestamp"].astype(np.int64), unit="ms", utc=True).dt.tz_localize(None)
+    merged["expiry_label"] = merged["expiration_ts"].dt.strftime("%d-%b")
+    merged["strike"] = merged["strike"].astype(float)
+    merged["open_interest"] = merged["open_interest"].astype(float)
+    merged["contract_size"] = merged["contract_size"].fillna(1.0).astype(float)
+    if "volume_usd" not in merged.columns:
+        merged["volume_usd"] = 0.0
+    merged["volume_usd"] = merged["volume_usd"].fillna(0.0).astype(float)
+    merged["option_type"] = (
+        merged["option_type_meta"]
+        .fillna(merged["instrument_name"].astype(str).str.split("-").str[-1].map({"C": "call", "P": "put"}))
+        .astype(str)
+        .str.lower()
+    )
+    merged = merged.sort_values("open_interest", ascending=False).head(BTC_OPTIONS_MAX_CONTRACTS)
+
+    tickers: list[dict[str, object]] = []
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 24)) as ex:
+        futures = {ex.submit(_safe_fetch_deribit_option_ticker, name): name for name in merged["instrument_name"]}
+        for fut in as_completed(futures):
+            payload = fut.result()
+            if payload:
+                tickers.append(payload)
+    ticker_df = pd.DataFrame(tickers)
+    if ticker_df.empty:
+        return {"error": "No Deribit option tickers with greeks could be fetched."}
+
+    options_df = merged.merge(ticker_df, on="instrument_name", how="inner")
+    if options_df.empty:
+        return {"error": "Options universe could not be merged with Deribit greeks."}
+
+    spot = float(options_df["underlying_price"].replace(0.0, np.nan).median())
+    options_df["gex_abs"] = (
+        options_df["gamma"].abs()
+        * options_df["open_interest"]
+        * options_df["underlying_price"].replace(0.0, spot).fillna(spot)
+        * options_df["underlying_price"].replace(0.0, spot).fillna(spot)
+        * options_df["contract_size"]
+        / 1_000_000.0
+    )
+    options_df["call_gex"] = np.where(options_df["option_type"] == "call", options_df["gex_abs"], 0.0)
+    options_df["put_gex"] = np.where(options_df["option_type"] == "put", options_df["gex_abs"], 0.0)
+    options_df["signed_gex"] = np.where(options_df["option_type"] == "call", options_df["gex_abs"], -options_df["gex_abs"])
+
+    strike_map = (
+        options_df.groupby("strike", as_index=False)
+        .agg(
+            call_gex=("call_gex", "sum"),
+            put_gex=("put_gex", "sum"),
+            signed_gex=("signed_gex", "sum"),
+            abs_gex=("gex_abs", "sum"),
+            total_oi=("open_interest", "sum"),
+            avg_iv=("mark_iv", "mean"),
+        )
+        .sort_values("strike")
+    )
+    expiry_map = (
+        options_df.groupby(["expiry_label", "expiration_ts"], as_index=False)
+        .agg(abs_gex=("gex_abs", "sum"), signed_gex=("signed_gex", "sum"), total_oi=("open_interest", "sum"), avg_iv=("mark_iv", "mean"))
+        .sort_values("expiration_ts")
+    )
+    atm_iv = (
+        options_df.assign(distance=(options_df["strike"] - spot).abs())
+        .sort_values(["expiration_ts", "distance"])
+        .groupby("expiry_label", as_index=False)
+        .first()[["expiry_label", "expiration_ts", "mark_iv"]]
+        .sort_values("expiration_ts")
+    )
+
+    nearby_strikes = strike_map[(strike_map["strike"] >= spot * 0.85) & (strike_map["strike"] <= spot * 1.15)].copy()
+    if nearby_strikes.empty:
+        nearby_strikes = strike_map.copy()
+    support_levels = (
+        nearby_strikes[nearby_strikes["strike"] < spot]
+        .sort_values(["put_gex", "total_oi"], ascending=False)
+        .head(3)
+        .assign(distance_pct=lambda df: ((df["strike"] / spot) - 1.0) * 100.0)
+    )
+    resistance_levels = (
+        nearby_strikes[nearby_strikes["strike"] > spot]
+        .sort_values(["call_gex", "total_oi"], ascending=False)
+        .head(3)
+        .assign(distance_pct=lambda df: ((df["strike"] / spot) - 1.0) * 100.0)
+    )
+    gamma_flip = _find_gamma_flip(strike_map)
+    total_abs_gex = float(options_df["gex_abs"].sum())
+    total_signed_gex = float(options_df["signed_gex"].sum())
+    top5_concentration = float(options_df["gex_abs"].nlargest(5).sum() / total_abs_gex) if total_abs_gex > 0 else 0.0
+
+    klines = _fetch_binance_btc_perp_klines()
+    oi_hist = _fetch_binance_btc_open_interest_hist()
+    perp_snapshot = _fetch_binance_btc_perp_snapshot()
+    avwap_df, anchor_ts = _build_anchored_vwap_frame(klines, anchor_mode)
+    sweeps = _detect_recent_sweeps(avwap_df, oi_hist)
+
+    oi_latest_value = float(oi_hist["oi_value"].iloc[-1]) if not oi_hist.empty else 0.0
+    oi_change_1h = float(oi_hist["oi_value"].pct_change(12).iloc[-1]) if len(oi_hist) > 12 else 0.0
+
+    return {
+        "spot": spot,
+        "options_df": options_df,
+        "strike_map": strike_map,
+        "expiry_map": expiry_map,
+        "atm_iv": atm_iv,
+        "support_levels": support_levels,
+        "resistance_levels": resistance_levels,
+        "gamma_flip": gamma_flip,
+        "total_abs_gex": total_abs_gex,
+        "total_signed_gex": total_signed_gex,
+        "call_gex": float(options_df["call_gex"].sum()),
+        "put_gex": float(options_df["put_gex"].sum()),
+        "top5_concentration": top5_concentration,
+        "perp_snapshot": perp_snapshot,
+        "anchor_ts": anchor_ts,
+        "avwap_df": avwap_df,
+        "sweeps": sweeps,
+        "oi_latest_value": oi_latest_value,
+        "oi_change_1h": oi_change_1h,
+    }
+
+
+def _build_gex_strike_chart(strike_map: pd.DataFrame, spot: float) -> go.Figure:
+    nearby = strike_map[(strike_map["strike"] >= spot * 0.85) & (strike_map["strike"] <= spot * 1.15)].copy()
+    if nearby.empty:
+        nearby = strike_map.copy()
+    fig = go.Figure()
+    fig.add_bar(name="Call GEX", x=nearby["strike"], y=nearby["call_gex"], marker_color="#9fab95")
+    fig.add_bar(name="Put GEX", x=nearby["strike"], y=-nearby["put_gex"], marker_color="#f472b6")
+    fig.add_vline(x=spot, line_color="#e4eadf", line_dash="dash")
+    fig.update_layout(
+        barmode="relative",
+        title="Strike GEX Map (Simple Approximation)",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=60, b=30),
+        xaxis_title="Strike",
+        yaxis_title="Approx GEX ($M)",
+        legend=dict(orientation="h"),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=True, zerolinecolor=APP_BORDER, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_expiry_map_chart(expiry_map: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_bar(x=expiry_map["expiry_label"], y=expiry_map["abs_gex"], name="Abs GEX ($M)", marker_color="#dfe7d8")
+    fig.add_scatter(x=expiry_map["expiry_label"], y=expiry_map["total_oi"], name="OI (BTC)", mode="lines+markers", yaxis="y2", line=dict(color="#3b82f6"))
+    fig.update_layout(
+        title="Expiry Map",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=30, t=60, b=30),
+        xaxis_title="Expiry",
+        yaxis_title="Abs GEX ($M)",
+        yaxis2=dict(title="OI (BTC)", overlaying="y", side="right", showgrid=False),
+        legend=dict(orientation="h"),
+    )
+    fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_iv_curve_chart(atm_iv: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_scatter(x=atm_iv["expiry_label"], y=atm_iv["mark_iv"], mode="lines+markers", line=dict(color="#e4eadf"))
+    fig.update_layout(
+        title="ATM IV by Expiry",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=60, b=30),
+        xaxis_title="Expiry",
+        yaxis_title="Mark IV",
+    )
+    fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_avwap_chart(avwap_df: pd.DataFrame, anchor_ts: pd.Timestamp) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Candlestick(
+            x=avwap_df["ts"],
+            open=avwap_df["open"],
+            high=avwap_df["high"],
+            low=avwap_df["low"],
+            close=avwap_df["close"],
+            name="BTCUSDT Perp",
+            increasing_line_color="#dfe7d8",
+            decreasing_line_color="#8f9a8b",
+            showlegend=False,
+        )
+    )
+    fig.add_scatter(x=avwap_df["ts"], y=avwap_df["avwap"], mode="lines", name="Anchored VWAP", line=dict(color="#3b82f6", width=2))
+    fig.add_scatter(x=avwap_df["ts"], y=avwap_df["band_1_up"], mode="lines", name="+1sigma", line=dict(color="#59705a", dash="dot"))
+    fig.add_scatter(x=avwap_df["ts"], y=avwap_df["band_1_dn"], mode="lines", name="-1sigma", line=dict(color="#59705a", dash="dot"))
+    fig.add_scatter(x=avwap_df["ts"], y=avwap_df["band_2_up"], mode="lines", name="+2sigma", line=dict(color="#f472b6", dash="dash"))
+    fig.add_scatter(x=avwap_df["ts"], y=avwap_df["band_2_dn"], mode="lines", name="-2sigma", line=dict(color="#f472b6", dash="dash"))
+    fig.add_vline(x=anchor_ts, line_color="#e4eadf", line_dash="dot")
+    fig.update_layout(
+        title=f"Anchored VWAP Dashboard ({anchor_ts.strftime('%Y-%m-%d %H:%M UTC')})",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=60, b=30),
+        xaxis_title="Time",
+        yaxis_title="BTCUSDT Perp",
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
+    st.markdown(f"**{title}**")
+    if levels.empty:
+        st.caption("No levels found in the current simple GEX window.")
+        return
+    for _, row in levels.iterrows():
+        distance = _safe_float(row.get("distance_pct"))
+        st.markdown(
+            f"- `{row['strike']:,.0f}` | `{field}: {row[field]:.2f}M` | `OI: {row['total_oi']:.2f} BTC` | "
+            f"`Distance: {distance:+.2f}%`"
+        )
+
+
+def _render_btc_options_cockpit(anchor_mode: str):
+    status = st.empty()
+    status.info("Building BTC options cockpit from public Deribit + Binance data...")
+    bundle = build_btc_options_cockpit(anchor_mode)
+    status.empty()
+    if "error" in bundle:
+        st.error(str(bundle["error"]))
+        return
+
+    spot = float(bundle["spot"])
+    gamma_flip = bundle["gamma_flip"]
+    perp = bundle["perp_snapshot"]
+    strike_map = bundle["strike_map"]
+    expiry_map = bundle["expiry_map"]
+    atm_iv = bundle["atm_iv"]
+    avwap_df = bundle["avwap_df"]
+    sweeps = bundle["sweeps"]
+    support_levels = bundle["support_levels"]
+    resistance_levels = bundle["resistance_levels"]
+
+    st.subheader("BTC Options Cockpit")
+    st.caption(
+        "Phase 1 public-data framework using Deribit BTC options and Binance BTCUSDT perpetuals. "
+        "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks."
+    )
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("BTC Spot", f"{spot:,.2f}")
+    c2.metric("ATM IV", f"{float(atm_iv['mark_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a")
+    c3.metric("Net GEX Approx", f"{float(bundle['total_signed_gex']):+.2f}M")
+    c4.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a")
+    c5.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}")
+    c6.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}")
+
+    s1, s2 = st.columns(2)
+    with s1:
+        st.markdown("### Potential GEX Support")
+        _render_gex_levels(support_levels, "Support", "put_gex")
+    with s2:
+        st.markdown("### Potential GEX Resistance")
+        _render_gex_levels(resistance_levels, "Resistance", "call_gex")
+
+    st.caption(
+        "Support/resistance levels are ranked from strike-level put/call gamma concentration near spot. "
+        "Treat them as probabilistic levels, not guaranteed barriers."
+    )
+
+    chart_left, chart_right = st.columns(2)
+    with chart_left:
+        st.plotly_chart(_build_gex_strike_chart(strike_map, spot), use_container_width=True)
+    with chart_right:
+        st.plotly_chart(_build_expiry_map_chart(expiry_map), use_container_width=True)
+
+    curve_col, flow_col = st.columns(2)
+    with curve_col:
+        st.plotly_chart(_build_iv_curve_chart(atm_iv), use_container_width=True)
+    with flow_col:
+        summary_rows = pd.DataFrame(
+            [
+                {"Metric": "Total Signed GEX", "Value": f"{float(bundle['total_signed_gex']):+.2f}M"},
+                {"Metric": "Total Absolute GEX", "Value": f"{float(bundle['total_abs_gex']):.2f}M"},
+                {"Metric": "Call GEX", "Value": f"{float(bundle['call_gex']):.2f}M"},
+                {"Metric": "Put GEX", "Value": f"{float(bundle['put_gex']):.2f}M"},
+                {"Metric": "Top 5 Concentration", "Value": f"{float(bundle['top5_concentration']):.1%}"},
+                {"Metric": "Perp Mark / Index", "Value": f"{_safe_float(perp.get('mark_price')):,.2f} / {_safe_float(perp.get('index_price')):,.2f}"},
+                {"Metric": "Current OI Contracts", "Value": f"{_safe_float(perp.get('open_interest_contracts')):,.0f}"},
+                {"Metric": "OI Value (latest)", "Value": f"{float(bundle['oi_latest_value']):,.0f}"},
+            ]
+        )
+        st.markdown("### Options / Perp Snapshot")
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=330)
+
+    st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
+
+    st.markdown("### Sweep Dashboard")
+    if sweeps.empty:
+        st.caption("No recent 5m sweep candidates were detected from the current price / wick / volume / OI rules.")
+    else:
+        sweep_df = sweeps.copy()
+        sweep_df["ts"] = sweep_df["ts"].dt.strftime("%Y-%m-%d %H:%M")
+        st.dataframe(
+            sweep_df.sort_values("ts", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "ts": st.column_config.TextColumn("Time"),
+                "direction": st.column_config.TextColumn("Sweep Type"),
+                "close": st.column_config.NumberColumn("Close", format="%.2f"),
+                "volume_z": st.column_config.NumberColumn("Vol Z", format="%.2f"),
+                "taker_imbalance": st.column_config.NumberColumn("Taker Imb", format="%.2f"),
+                "oi_value_change": st.column_config.NumberColumn("OI Change", format="%.2%"),
+                "broken_level": st.column_config.NumberColumn("Broken Level", format="%.2f"),
+            },
+            height=260,
+        )
+
 def _render_term_guide():
     st.subheader("Glossary / Term Guide")
     st.caption("Quick explanations for the score names and raw fields used in the screener table.")
@@ -1603,14 +2151,22 @@ def main():
         st.divider()
         page = st.radio(
             "Page",
-            ["Altcoins", "BITCOIN", "Glossary / Term Guide"],
-            index=["Altcoins", "BITCOIN", "Glossary / Term Guide"].index(st.session_state["app_page"]),
+            ["Altcoins", "BITCOIN", "BTC Options Cockpit", "Glossary / Term Guide"],
+            index=["Altcoins", "BITCOIN", "BTC Options Cockpit", "Glossary / Term Guide"].index(st.session_state["app_page"]),
             key="app_page",
         )
 
         if page == "Glossary / Term Guide":
             st.divider()
             st.caption("Reference page for all screener terms and score labels.")
+        elif page == "BTC Options Cockpit":
+            st.subheader("BTC Options")
+            options_anchor_mode = st.radio(
+                "Anchored VWAP",
+                ["Weekly Open", "Monthly Open", "Prior 24H High", "Prior 24H Low"],
+                index=0,
+            )
+            st.caption("Phase 1 uses public Deribit BTC options data plus Binance BTCUSDT perpetual context.")
         elif page == "BITCOIN":
             st.subheader("BITCOIN")
             bitcoin_mode = st.radio(
@@ -1680,6 +2236,10 @@ def main():
 
     if page == "Glossary / Term Guide":
         _render_term_guide()
+        return
+
+    if page == "BTC Options Cockpit":
+        _render_btc_options_cockpit(options_anchor_mode)
         return
 
     if page == "BITCOIN":
