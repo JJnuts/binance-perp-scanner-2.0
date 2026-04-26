@@ -388,6 +388,36 @@ def _inject_app_styles():
                 background: rgba(17, 24, 17, 0.6);
             }}
 
+            .term-guide-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 0.85rem;
+                margin-top: 0.8rem;
+            }}
+
+            .term-guide-card {{
+                background: rgba(20, 29, 20, 0.9);
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 10px;
+                padding: 0.9rem 1rem;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+            }}
+
+            .term-guide-title {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.98rem;
+                font-weight: 700;
+                line-height: 1.2;
+                margin-bottom: 0.45rem;
+            }}
+
+            .term-guide-copy {{
+                color: var(--app-muted);
+                font-size: 0.84rem;
+                line-height: 1.45;
+            }}
+
             hr {{
                 border-color: rgba(39, 50, 38, 0.75);
             }}
@@ -931,9 +961,20 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
 def _render_term_guide():
     with st.expander("TERM GUIDE"):
         st.caption("Quick explanations for the score names and raw fields used in the screener table.")
+        cards = []
         for term, description in TERM_GUIDE:
-            st.markdown(f"**{term}**")
-            st.write(description)
+            cards.append(
+                f"""
+                <div class="term-guide-card">
+                    <div class="term-guide-title">{term}</div>
+                    <div class="term-guide-copy">{description}</div>
+                </div>
+                """
+            )
+        st.markdown(
+            f'<div class="term-guide-grid">{"".join(cards)}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def _candidate_symbols(
