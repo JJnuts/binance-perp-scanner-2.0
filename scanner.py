@@ -49,6 +49,17 @@ SPOT_COLOR_MAP = {
     "Heating": "#f472b6",
     "Overheating": "#ef4444",
 }
+APP_BG = "#0b100b"
+APP_PANEL = "#111811"
+APP_PANEL_SOFT = "#141d14"
+APP_BORDER = "#273226"
+APP_GRID = "rgba(113, 133, 105, 0.18)"
+APP_TEXT = "#e4eadf"
+APP_MUTED = "#8f9a8b"
+APP_ACCENT = "#dfe7d8"
+BUBBLE_SIZE_MULTIPLIER = 10.5
+BUBBLE_SIZE_MIN = 4.0
+BUBBLE_SIZE_MAX = 34.0
 
 
 def _make_session() -> requests.Session:
@@ -85,6 +96,133 @@ def _get_json_url(
     response = _SESSION.get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
+
+
+def _inject_app_styles():
+    st.markdown(
+        f"""
+        <style>
+            :root {{
+                --app-bg: {APP_BG};
+                --app-panel: {APP_PANEL};
+                --app-panel-soft: {APP_PANEL_SOFT};
+                --app-border: {APP_BORDER};
+                --app-grid: {APP_GRID};
+                --app-text: {APP_TEXT};
+                --app-muted: {APP_MUTED};
+                --app-accent: {APP_ACCENT};
+            }}
+
+            .stApp {{
+                background:
+                    radial-gradient(circle at top left, rgba(34, 49, 30, 0.22) 0%, rgba(11, 16, 11, 0) 28%),
+                    linear-gradient(180deg, #0c130c 0%, #0b100b 100%);
+                color: var(--app-text);
+            }}
+
+            [data-testid="stAppViewContainer"] {{
+                background: transparent;
+            }}
+
+            [data-testid="stHeader"] {{
+                background: rgba(11, 16, 11, 0.72);
+                border-bottom: 1px solid rgba(39, 50, 38, 0.6);
+            }}
+
+            [data-testid="stSidebar"] {{
+                background: linear-gradient(180deg, #101710 0%, #0d140d 100%);
+                border-right: 1px solid rgba(39, 50, 38, 0.75);
+            }}
+
+            [data-testid="stSidebar"] * {{
+                color: var(--app-text);
+            }}
+
+            .block-container {{
+                padding-top: 2.2rem;
+                padding-bottom: 2.5rem;
+                max-width: 1500px;
+            }}
+
+            h1, h2, h3 {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                letter-spacing: 0.18em;
+                font-weight: 700;
+                text-transform: uppercase;
+            }}
+
+            p, label, .stCaption, .stMarkdown, .stText {{
+                color: var(--app-text);
+            }}
+
+            [data-testid="stMetric"] {{
+                background: rgba(17, 24, 17, 0.92);
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 4px;
+                padding: 0.9rem 1rem;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+            }}
+
+            [data-testid="stMetricLabel"] {{
+                color: var(--app-muted);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                font-size: 0.68rem;
+            }}
+
+            [data-testid="stMetricValue"] {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-weight: 600;
+            }}
+
+            [data-testid="stRadio"] > div,
+            [data-testid="stNumberInputContainer"],
+            [data-testid="stSlider"] {{
+                background: rgba(17, 24, 17, 0.88);
+                border: 1px solid rgba(39, 50, 38, 0.75);
+                border-radius: 4px;
+                padding: 0.45rem 0.55rem;
+            }}
+
+            .stButton > button,
+            [data-baseweb="select"] > div,
+            [data-baseweb="input"] > div {{
+                background: rgba(17, 24, 17, 0.9);
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                color: var(--app-text);
+                border-radius: 4px;
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+            }}
+
+            .stButton > button:hover {{
+                border-color: rgba(94, 111, 87, 0.9);
+                color: var(--app-accent);
+            }}
+
+            [data-testid="stDataFrame"],
+            [data-testid="stTable"] {{
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 4px;
+                overflow: hidden;
+                background: rgba(17, 24, 17, 0.84);
+            }}
+
+            [data-testid="stExpander"] {{
+                border: 1px solid rgba(39, 50, 38, 0.78);
+                border-radius: 4px;
+                background: rgba(17, 24, 17, 0.6);
+            }}
+
+            hr {{
+                border-color: rgba(39, 50, 38, 0.75);
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -337,7 +475,9 @@ def _prepare_bubble_frame(df: pd.DataFrame) -> pd.DataFrame:
     out["temperature"] = out["volume_z"].map(_classify_volume_temperature)
     scale_base = float(out["quote_volume"].median()) if not out.empty else 1.0
     scale_base = max(scale_base, 1.0)
-    out["bubble_size"] = (np.sqrt(out["quote_volume"] / scale_base) * 18.0).clip(lower=6.0, upper=65.0)
+    out["bubble_size"] = (
+        np.sqrt(out["quote_volume"] / scale_base) * BUBBLE_SIZE_MULTIPLIER
+    ).clip(lower=BUBBLE_SIZE_MIN, upper=BUBBLE_SIZE_MAX)
     return out
 
 
@@ -506,7 +646,7 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
         x="ts",
         y="close",
         size="bubble_size",
-        size_max=60,
+        size_max=int(BUBBLE_SIZE_MAX),
         color="temperature",
         color_discrete_map=SPOT_COLOR_MAP,
         hover_name="source",
@@ -523,14 +663,22 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
     )
     fig.update_traces(marker=dict(opacity=0.85, line=dict(width=0)))
     fig.update_layout(
-        plot_bgcolor="#0e1117",
-        paper_bgcolor="#0e1117",
-        font_color="white",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
         legend_title="Volume State",
         title_font_size=17,
         xaxis_title="Date",
         yaxis_title="BTC Price (USD)",
+        legend=dict(
+            bgcolor="rgba(17, 24, 17, 0.0)",
+            bordercolor="rgba(39, 50, 38, 0.0)",
+            font=dict(color=APP_TEXT),
+        ),
+        margin=dict(l=30, r=20, t=60, b=30),
     )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
     return fig
 
 
@@ -801,18 +949,26 @@ def _scatter(df: pd.DataFrame, x: str, y: str, color: str, title: str, x_label: 
         },
         labels={x: x_label, y: y_label, color: color.replace("_", " ").title()},
         title=title,
-        color_continuous_scale="Turbo",
+        color_continuous_scale=[
+            [0.0, "#293528"],
+            [0.35, "#59705a"],
+            [0.7, "#9fab95"],
+            [1.0, "#e4eadf"],
+        ],
         template="plotly_dark",
         height=650,
     )
     fig.update_traces(marker=dict(size=8, opacity=0.86))
     fig.update_layout(
-        plot_bgcolor="#0e1117",
-        paper_bgcolor="#0e1117",
-        font_color="white",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
         title_font_size=17,
         coloraxis_colorbar_title=color.replace("_", " ").title(),
+        margin=dict(l=30, r=20, t=60, b=30),
     )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
     return fig
 
 
@@ -993,6 +1149,7 @@ def main():
         page_icon=":satellite:",
         layout="wide",
     )
+    _inject_app_styles()
 
     st_autorefresh(interval=REFRESH_MS, key="scanner_refresh")
 
