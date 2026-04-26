@@ -1084,17 +1084,17 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_lookback_days: int):
     errors = bubble_bundle["errors"]
     aggregate_keys = bubble_bundle["aggregate_keys"]
 
-    if bitcoin_mode == "BITCOIN spot volume bubblemap (based on Binance spot volume)":
+    if bitcoin_mode == "Bitcoin Spot Vol (Binance)":
         source_key = "binance"
-        title = "BITCOIN Spot Volume Bubble Map - Binance"
+        title = "Bitcoin Spot Volume Bubble Map - Binance"
         df = sources.get(source_key, pd.DataFrame())
-    elif bitcoin_mode == "BITCOIN spot volume bubblemap (based on Coinbase spot volume)":
+    elif bitcoin_mode == "Bitcoin Spot Vol (Coinbase)":
         source_key = "coinbase"
-        title = "BITCOIN Spot Volume Bubble Map - Coinbase"
+        title = "Bitcoin Spot Volume Bubble Map - Coinbase"
         df = sources.get(source_key, pd.DataFrame())
     else:
         source_key = "aggregated"
-        title = "BITCOIN Spot Volume Bubble Map - Aggregated CEX"
+        title = "Bitcoin Spot Volume Bubble Map - Aggregated CEX"
         df = aggregated
 
     if df.empty:
@@ -1171,11 +1171,11 @@ def main():
         if section == "BITCOIN":
             st.subheader("BITCOIN")
             bitcoin_mode = st.radio(
-                "BITCOIN view",
+                "Bitcoin Spot Volume Bubblemap",
                 [
-                    "BITCOIN spot volume bubblemap (based on Binance spot volume)",
-                    "BITCOIN spot volume bubblemap (based on Coinbase spot volume)",
-                    "BITCOIN spot volume bubblemap (aggregated - across all CEX and Hyperliquid)",
+                    "Bitcoin Spot Vol (Binance)",
+                    "Bitcoin Spot Vol (Coinbase)",
+                    "Bitcoin Spot Vol (Aggregated)",
                 ],
                 index=0,
             )
