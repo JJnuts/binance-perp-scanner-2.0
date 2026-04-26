@@ -1033,19 +1033,33 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
 
 
 def _render_term_guide():
-    with st.expander("TERM GUIDE"):
-        st.caption("Quick explanations for the score names and raw fields used in the screener table.")
-        sections = []
-        for group_name, items in TERM_GUIDE_GROUPS:
-            cards = []
-            for term, description in items:
-                cards.append(
-                    f'<div class="term-guide-card"><div class="term-guide-title">{term}</div><div class="term-guide-copy">{description}</div></div>'
-                )
-            sections.append(
-                f'<div class="term-guide-group"><div class="term-guide-group-title">{group_name}</div><div class="term-guide-grid">{"".join(cards)}</div></div>'
+    st.subheader("Glossary / Term Guide")
+    st.caption("Quick explanations for the score names and raw fields used in the screener table.")
+    sections = []
+    for group_name, items in TERM_GUIDE_GROUPS:
+        cards = []
+        for term, description in items:
+            cards.append(
+                f'<div class="term-guide-card"><div class="term-guide-title">{term}</div><div class="term-guide-copy">{description}</div></div>'
             )
-        st.markdown("".join(sections), unsafe_allow_html=True)
+        sections.append(
+            f'<div class="term-guide-group"><div class="term-guide-group-title">{group_name}</div><div class="term-guide-grid">{"".join(cards)}</div></div>'
+        )
+    st.markdown("".join(sections), unsafe_allow_html=True)
+
+
+def _set_page(page_name: str):
+    st.session_state["app_page"] = page_name
+
+
+def _render_glossary_jump():
+    st.button(
+        "📖 Glossary / Term Guide",
+        key="open_glossary_page",
+        on_click=_set_page,
+        args=("Glossary / Term Guide",),
+        use_container_width=True,
+    )
 
 
 def _candidate_symbols(
@@ -1530,16 +1544,26 @@ def main():
         "volume expansion, EMA/VWAP trend, open interest, and funding quality."
     )
 
+    if "app_page" not in st.session_state:
+        st.session_state["app_page"] = "Altcoins"
+
     with st.sidebar:
-        st.header("Controls")
         if st.button("Force refresh"):
             st.cache_data.clear()
             st.rerun()
 
         st.divider()
-        section = st.radio("Section", ["Altcoins", "BITCOIN"], index=0)
+        page = st.radio(
+            "Page",
+            ["Altcoins", "BITCOIN", "Glossary / Term Guide"],
+            index=["Altcoins", "BITCOIN", "Glossary / Term Guide"].index(st.session_state["app_page"]),
+            key="app_page",
+        )
 
-        if section == "BITCOIN":
+        if page == "Glossary / Term Guide":
+            st.divider()
+            st.caption("Reference page for all screener terms and score labels.")
+        elif page == "BITCOIN":
             st.subheader("BITCOIN")
             bitcoin_mode = st.radio(
                 "Bitcoin Spot Volume Bubblemap",
@@ -1606,7 +1630,11 @@ def main():
             st.caption("Universe excludes BTCUSDT by design.")
             st.caption("Data: Binance Futures public market data endpoints.")
 
-    if section == "BITCOIN":
+    if page == "Glossary / Term Guide":
+        _render_term_guide()
+        return
+
+    if page == "BITCOIN":
         _render_bitcoin_section(bitcoin_mode, bubble_timeframe, bubble_lookback_days)
         return
 
@@ -1684,10 +1712,12 @@ def main():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader(f"Top {score_label.lower()} setups ({len(setups)} assets)")
+    heading_col, glossary_col = st.columns([0.76, 0.24], vertical_alignment="bottom")
+    with heading_col:
+        st.subheader(f"Top {score_label.lower()} setups ({len(setups)} assets)")
+    with glossary_col:
+        _render_glossary_jump()
     _show_table(setups.head(top_n))
-    st.divider()
-    _render_term_guide()
 
     with st.expander(f"Full screener ({len(df)} assets)"):
         _show_table(ranked_df)
