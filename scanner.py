@@ -482,14 +482,45 @@ def _inject_app_styles():
                 margin-top: 1rem;
             }}
 
-            .term-guide-group-title {{
+            .term-guide-section {{
+                margin-top: 1rem;
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 10px;
+                background: rgba(17, 24, 17, 0.65);
+                overflow: hidden;
+            }}
+
+            .term-guide-summary {{
                 color: var(--app-accent);
                 font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-                font-size: 0.86rem;
+                font-size: 1.02rem;
                 font-weight: 700;
                 letter-spacing: 0.12em;
                 text-transform: uppercase;
-                margin: 0.2rem 0 0.65rem 0;
+                padding: 0.9rem 1rem;
+                cursor: pointer;
+                list-style: none;
+                background: rgba(20, 29, 20, 0.92);
+                border-bottom: 1px solid rgba(39, 50, 38, 0.75);
+            }}
+
+            .term-guide-summary::-webkit-details-marker {{
+                display: none;
+            }}
+
+            .term-guide-summary::before {{
+                content: "▸";
+                display: inline-block;
+                margin-right: 0.55rem;
+                transition: transform 0.18s ease;
+            }}
+
+            details[open] > .term-guide-summary::before {{
+                transform: rotate(90deg);
+            }}
+
+            .term-guide-section-body {{
+                padding: 0 1rem 1rem 1rem;
             }}
 
             hr {{
@@ -1036,14 +1067,15 @@ def _render_term_guide():
     st.subheader("Glossary / Term Guide")
     st.caption("Quick explanations for the score names and raw fields used in the screener table.")
     sections = []
-    for group_name, items in TERM_GUIDE_GROUPS:
+    for idx, (group_name, items) in enumerate(TERM_GUIDE_GROUPS):
         cards = []
         for term, description in items:
             cards.append(
                 f'<div class="term-guide-card"><div class="term-guide-title">{term}</div><div class="term-guide-copy">{description}</div></div>'
             )
+        open_attr = " open" if idx == 0 else ""
         sections.append(
-            f'<div class="term-guide-group"><div class="term-guide-group-title">{group_name}</div><div class="term-guide-grid">{"".join(cards)}</div></div>'
+            f'<details class="term-guide-section"{open_attr}><summary class="term-guide-summary">{group_name}</summary><div class="term-guide-section-body"><div class="term-guide-grid">{"".join(cards)}</div></div></details>'
         )
     st.markdown("".join(sections), unsafe_allow_html=True)
 
