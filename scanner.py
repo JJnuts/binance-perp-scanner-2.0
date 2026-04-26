@@ -1094,6 +1094,19 @@ def _render_glossary_jump():
     )
 
 
+def _term_help(term: str) -> str:
+    for _, items in TERM_GUIDE_GROUPS:
+        for item_term, description in items:
+            if item_term == term:
+                return description
+    fallback = {
+        "Overall HTF Strength": "Single summary of the asset's higher-timeframe momentum profile. In this view it is the HTF Momentum score.",
+        "Overall LTF Strength": "Single summary of the asset's lower-timeframe momentum profile. In this view it is the LTF Momentum score.",
+        "Symbol": "Binance USDT-M perpetual contract symbol.",
+    }
+    return fallback.get(term, "")
+
+
 def _candidate_symbols(
     symbols: tuple[str, ...],
     ticker_stats: dict[str, dict[str, float]],
@@ -1413,20 +1426,20 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
         table_df = df.copy()
         table_df["overall_ltf_strength"] = table_df["momentum_score"]
         column_config = {
-            "symbol": st.column_config.TextColumn("Symbol"),
-            "htf_momentum_score": st.column_config.NumberColumn("HTF Momentum", format="%.1f"),
-            "htf_setup_score": st.column_config.NumberColumn("HTF Setup", format="%.1f"),
-            "htf_alpha_score": st.column_config.NumberColumn("HTF Alpha", format="%.1f"),
-            "htf_relative_strength_score": st.column_config.NumberColumn("HTF RS", format="%.1f"),
-            "vol_adjusted_score": st.column_config.NumberColumn("Vol-Adj", format="%.1f"),
-            "htf_trend_score": st.column_config.NumberColumn("HTF Trend", format="%.1f"),
-            "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f"),
-            "funding_trend_quality_score": st.column_config.NumberColumn("Funding Trend", format="%.1f"),
-            "rs_24h": st.column_config.TextColumn("RS 24H"),
-            "rs_72h": st.column_config.TextColumn("RS 72H"),
-            "alpha_24h": st.column_config.TextColumn("Alpha 24H"),
-            "alpha_72h": st.column_config.TextColumn("Alpha 72H"),
-            "overall_ltf_strength": st.column_config.NumberColumn("Overall LTF Strength", format="%.1f"),
+            "symbol": st.column_config.TextColumn("Symbol", help=_term_help("Symbol")),
+            "htf_momentum_score": st.column_config.NumberColumn("HTF Momentum", format="%.1f", help=_term_help("HTF Momentum")),
+            "htf_setup_score": st.column_config.NumberColumn("HTF Setup", format="%.1f", help=_term_help("HTF Setup")),
+            "htf_alpha_score": st.column_config.NumberColumn("HTF Alpha", format="%.1f", help=_term_help("HTF Alpha")),
+            "htf_relative_strength_score": st.column_config.NumberColumn("HTF RS", format="%.1f", help=_term_help("HTF RS")),
+            "vol_adjusted_score": st.column_config.NumberColumn("Vol-Adj", format="%.1f", help=_term_help("Vol-Adj")),
+            "htf_trend_score": st.column_config.NumberColumn("HTF Trend", format="%.1f", help=_term_help("HTF Trend")),
+            "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f", help=_term_help("OI Score")),
+            "funding_trend_quality_score": st.column_config.NumberColumn("Funding Trend", format="%.1f", help=_term_help("Funding Trend")),
+            "rs_24h": st.column_config.TextColumn("RS 24H", help=_term_help("RS 24H")),
+            "rs_72h": st.column_config.TextColumn("RS 72H", help=_term_help("RS 72H")),
+            "alpha_24h": st.column_config.TextColumn("Alpha 24H", help=_term_help("Alpha 24H")),
+            "alpha_72h": st.column_config.TextColumn("Alpha 72H", help=_term_help("Alpha 72H")),
+            "overall_ltf_strength": st.column_config.NumberColumn("Overall LTF Strength", format="%.1f", help=_term_help("Overall LTF Strength")),
         }
     else:
         cols = [
@@ -1454,25 +1467,25 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
         table_df = df.copy()
         table_df["overall_htf_strength"] = table_df["htf_momentum_score"]
         column_config = {
-            "symbol": st.column_config.TextColumn("Symbol"),
-            "momentum_score": st.column_config.NumberColumn("Momentum", format="%.1f"),
-            "overextension_score": st.column_config.NumberColumn("Overext", format="%.1f"),
-            "setup_score": st.column_config.NumberColumn("Setup", format="%.1f"),
-            "alpha_score": st.column_config.NumberColumn("Alpha Score", format="%.1f"),
-            "relative_strength_score": st.column_config.NumberColumn("RS Score", format="%.1f"),
-            "volume_score": st.column_config.NumberColumn("Vol Score", format="%.1f"),
-            "trend_score": st.column_config.NumberColumn("Trend Score", format="%.1f"),
-            "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f"),
-            "funding_quality_score": st.column_config.NumberColumn("Funding Score", format="%.1f"),
-            "rs_1h": st.column_config.TextColumn("RS 1H"),
-            "rs_4h": st.column_config.TextColumn("RS 4H"),
-            "rs_24h": st.column_config.TextColumn("RS 24H"),
-            "alpha_4h": st.column_config.TextColumn("Alpha 4H"),
-            "alpha_24h": st.column_config.TextColumn("Alpha 24H"),
-            "volume_ratio_1h": st.column_config.NumberColumn("Vol Ratio", format="%.2f"),
-            "volume_z_1h": st.column_config.NumberColumn("Vol Z", format="%.2f"),
-            "oi_change_1h": st.column_config.TextColumn("OI 1H"),
-            "overall_htf_strength": st.column_config.NumberColumn("Overall HTF Strength", format="%.1f"),
+            "symbol": st.column_config.TextColumn("Symbol", help=_term_help("Symbol")),
+            "momentum_score": st.column_config.NumberColumn("Momentum", format="%.1f", help=_term_help("Momentum")),
+            "overextension_score": st.column_config.NumberColumn("Overext", format="%.1f", help=_term_help("Overext")),
+            "setup_score": st.column_config.NumberColumn("Setup", format="%.1f", help=_term_help("Setup")),
+            "alpha_score": st.column_config.NumberColumn("Alpha Score", format="%.1f", help=_term_help("Alpha Score")),
+            "relative_strength_score": st.column_config.NumberColumn("RS Score", format="%.1f", help=_term_help("RS Score")),
+            "volume_score": st.column_config.NumberColumn("Vol Score", format="%.1f", help=_term_help("Vol Score")),
+            "trend_score": st.column_config.NumberColumn("Trend Score", format="%.1f", help=_term_help("Trend Score")),
+            "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f", help=_term_help("OI Score")),
+            "funding_quality_score": st.column_config.NumberColumn("Funding Score", format="%.1f", help=_term_help("Funding Score")),
+            "rs_1h": st.column_config.TextColumn("RS 1H", help=_term_help("RS 1H")),
+            "rs_4h": st.column_config.TextColumn("RS 4H", help=_term_help("RS 4H")),
+            "rs_24h": st.column_config.TextColumn("RS 24H", help=_term_help("RS 24H")),
+            "alpha_4h": st.column_config.TextColumn("Alpha 4H", help=_term_help("Alpha 4H")),
+            "alpha_24h": st.column_config.TextColumn("Alpha 24H", help=_term_help("Alpha 24H")),
+            "volume_ratio_1h": st.column_config.NumberColumn("Vol Ratio", format="%.2f", help=_term_help("Vol Ratio")),
+            "volume_z_1h": st.column_config.NumberColumn("Vol Z", format="%.2f", help=_term_help("Vol Z")),
+            "oi_change_1h": st.column_config.TextColumn("OI 1H", help=_term_help("OI 1H")),
+            "overall_htf_strength": st.column_config.NumberColumn("Overall HTF Strength", format="%.1f", help=_term_help("Overall HTF Strength")),
         }
 
     table_df = table_df[cols].copy()
