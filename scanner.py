@@ -2438,14 +2438,34 @@ def _render_btc_options_cockpit(anchor_mode: str):
     resistance_levels = bundle["resistance_levels"]
     ibit = bundle["ibit_context"]
 
-    st.markdown("### Institutional Positioning Summary")
-    _render_institutional_positioning_summary(bundle)
-
     st.subheader("BTC Options Screener")
     st.caption(
         "Phase 1 public-data framework using Deribit BTC options and Binance BTCUSDT perpetuals. "
         "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks."
     )
+
+    st.markdown("### IBIT Flow Context")
+    if isinstance(ibit, dict) and "error" in ibit:
+        st.caption(str(ibit["error"]))
+    else:
+        ib1, ib2, ib3, ib4, ib5 = st.columns(5)
+        ib1.metric("IBIT Price", f"{_safe_float(ibit.get('price')):,.2f}")
+        ib2.metric("Session Return", f"{_safe_float(ibit.get('session_return')):+.2%}")
+        ib3.metric("Session Volume", _format_human_count(_safe_float(ibit.get("session_volume"))))
+        ib4.metric("20D Avg Volume", _format_human_count(_safe_float(ibit.get("avg_20d_volume"))))
+        ib5.metric("ETF Flow", str(ibit.get("flow_state", "Unavailable")))
+        market_ts = ibit.get("market_ts")
+        if isinstance(market_ts, pd.Timestamp):
+            market_copy = market_ts.strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            market_copy = "latest available session data"
+        st.caption(
+            f"IBIT is used here as a US-session spot-demand confirmation layer. Volume is running at "
+            f"{_safe_float(ibit.get('volume_ratio')):.2f}x its 20-day average as of {market_copy}. {str(ibit.get('flow_copy', ''))}"
+        )
+
+    st.markdown("### Institutional Positioning Summary")
+    _render_institutional_positioning_summary(bundle)
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("BTC Spot", f"{spot:,.2f}")
@@ -2492,26 +2512,6 @@ def _render_btc_options_cockpit(anchor_mode: str):
         )
         st.markdown("### Options / Perp Snapshot")
         _render_options_snapshot_table(summary_rows)
-
-    st.markdown("### IBIT Flow Context")
-    if isinstance(ibit, dict) and "error" in ibit:
-        st.caption(str(ibit["error"]))
-    else:
-        ib1, ib2, ib3, ib4, ib5 = st.columns(5)
-        ib1.metric("IBIT Price", f"{_safe_float(ibit.get('price')):,.2f}")
-        ib2.metric("Session Return", f"{_safe_float(ibit.get('session_return')):+.2%}")
-        ib3.metric("Session Volume", _format_human_count(_safe_float(ibit.get("session_volume"))))
-        ib4.metric("20D Avg Volume", _format_human_count(_safe_float(ibit.get("avg_20d_volume"))))
-        ib5.metric("ETF Flow", str(ibit.get("flow_state", "Unavailable")))
-        market_ts = ibit.get("market_ts")
-        if isinstance(market_ts, pd.Timestamp):
-            market_copy = market_ts.strftime("%Y-%m-%d %H:%M UTC")
-        else:
-            market_copy = "latest available session data"
-        st.caption(
-            f"IBIT is used here as a US-session spot-demand confirmation layer. Volume is running at "
-            f"{_safe_float(ibit.get('volume_ratio')):.2f}x its 20-day average as of {market_copy}. {str(ibit.get('flow_copy', ''))}"
-        )
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
 
