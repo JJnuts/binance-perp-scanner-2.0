@@ -54,12 +54,19 @@ BTC_BUBBLE_TIMEFRAMES = {
         "bars_per_day": 1,
         "z_window": 30,
         "binance_interval": "1d",
+        "binance_fetch_multiplier": 1,
         "coinbase_granularity": 86400,
         "coinbase_rule": None,
+        "coinbase_fetch_multiplier": 1,
         "kraken_interval": 1440,
         "kraken_rule": None,
+        "kraken_fetch_multiplier": 1,
         "bybit_interval": "D",
+        "bybit_rule": None,
+        "bybit_fetch_multiplier": 1,
         "okx_bar": "1Dutc",
+        "okx_rule": None,
+        "okx_fetch_multiplier": 1,
     },
     "12H": {
         "label": "12H",
@@ -67,12 +74,19 @@ BTC_BUBBLE_TIMEFRAMES = {
         "bars_per_day": 2,
         "z_window": 60,
         "binance_interval": "12h",
+        "binance_fetch_multiplier": 1,
         "coinbase_granularity": 3600,
         "coinbase_rule": "12h",
+        "coinbase_fetch_multiplier": 12,
         "kraken_interval": 240,
         "kraken_rule": "12h",
+        "kraken_fetch_multiplier": 3,
         "bybit_interval": "720",
+        "bybit_rule": None,
+        "bybit_fetch_multiplier": 1,
         "okx_bar": "12H",
+        "okx_rule": None,
+        "okx_fetch_multiplier": 1,
     },
     "8H": {
         "label": "8H",
@@ -80,12 +94,19 @@ BTC_BUBBLE_TIMEFRAMES = {
         "bars_per_day": 3,
         "z_window": 90,
         "binance_interval": "8h",
+        "binance_fetch_multiplier": 1,
         "coinbase_granularity": 3600,
         "coinbase_rule": "8h",
+        "coinbase_fetch_multiplier": 8,
         "kraken_interval": 240,
         "kraken_rule": "8h",
-        "bybit_interval": "480",
-        "okx_bar": "8H",
+        "kraken_fetch_multiplier": 2,
+        "bybit_interval": "240",
+        "bybit_rule": "8h",
+        "bybit_fetch_multiplier": 2,
+        "okx_bar": "4H",
+        "okx_rule": "8h",
+        "okx_fetch_multiplier": 2,
     },
 }
 SPOT_COLOR_MAP = {
@@ -894,7 +915,7 @@ def _fetch_coinbase_spot_btc(limit: int, granularity: int, rule: Optional[str]) 
     return df.tail(limit)
 
 
-def _fetch_bybit_spot_btc(limit: int, interval: str) -> pd.DataFrame:
+def _fetch_bybit_spot_btc(limit: int, interval: str, rule: Optional[str]) -> pd.DataFrame:
     raw = _get_json_url(
         "https://api.bybit.com/v5/market/kline",
         params={"category": "spot", "symbol": "BTCUSDT", "interval": interval, "limit": min(limit, 1000)},
@@ -905,11 +926,11 @@ def _fetch_bybit_spot_btc(limit: int, interval: str) -> pd.DataFrame:
     df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
-    df["source"] = "Bybit spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+    df = _resample_spot_frame(df[["ts", "close", "quote_volume"]], rule, "Bybit spot")
+    return df.tail(limit)
 
 
-def _fetch_okx_spot_btc(limit: int, bar: str) -> pd.DataFrame:
+def _fetch_okx_spot_btc(limit: int, bar: str, rule: Optional[str]) -> pd.DataFrame:
     raw = _get_json_url(
         "https://www.okx.com/api/v5/market/history-candles",
         params={"instId": "BTC-USDT", "bar": bar, "limit": min(limit, 300)},
@@ -923,8 +944,8 @@ def _fetch_okx_spot_btc(limit: int, bar: str) -> pd.DataFrame:
     df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
-    df["source"] = "OKX spot"
-    return df[["ts", "close", "quote_volume", "source"]].sort_values("ts").tail(limit)
+    df = _resample_spot_frame(df[["ts", "close", "quote_volume"]], rule, "OKX spot")
+    return df.tail(limit)
 
 
 def _fetch_kraken_spot_btc(limit: int, interval: int, rule: Optional[str]) -> pd.DataFrame:
@@ -962,36 +983,39 @@ def build_bitcoin_bubble_data(lookback_days: int, timeframe_key: str) -> dict[st
     config = BTC_BUBBLE_TIMEFRAMES[timeframe_key]
     display_bars = int(np.ceil(lookback_days * config["bars_per_day"]))
     limit = display_bars + int(config["z_window"]) + 5
+    source_limit = lambda key: int(np.ceil(limit * float(config.get(f"{key}_fetch_multiplier", 1))))
     fetchers = {
         "binance": (
             "Binance spot",
             _fetch_binance_spot_btc,
-            limit,
+            source_limit("binance"),
             str(config["binance_interval"]),
         ),
         "coinbase": (
             "Coinbase spot",
             _fetch_coinbase_spot_btc,
-            limit,
+            source_limit("coinbase"),
             int(config["coinbase_granularity"]),
             config["coinbase_rule"],
         ),
         "bybit": (
             "Bybit spot",
             _fetch_bybit_spot_btc,
-            limit,
+            source_limit("bybit"),
             str(config["bybit_interval"]),
+            config["bybit_rule"],
         ),
         "okx": (
             "OKX spot",
             _fetch_okx_spot_btc,
-            limit,
+            source_limit("okx"),
             str(config["okx_bar"]),
+            config["okx_rule"],
         ),
         "kraken": (
             "Kraken spot",
             _fetch_kraken_spot_btc,
-            limit,
+            source_limit("kraken"),
             int(config["kraken_interval"]),
             config["kraken_rule"],
         ),
@@ -1111,6 +1135,12 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _format_gex_billions(gex_millions: float, signed: bool = False) -> str:
+    value = _safe_float(gex_millions) / 1000.0
+    sign = "+" if signed and value > 0 else ""
+    return f"{sign}{value:.2f}B"
 
 
 def _fetch_binance_btc_perp_klines(interval: str = "5m", limit: int = BTC_OPTIONS_KLINE_LIMIT) -> pd.DataFrame:
@@ -1424,9 +1454,11 @@ def _build_gex_strike_chart(strike_map: pd.DataFrame, spot: float) -> go.Figure:
     nearby = strike_map[(strike_map["strike"] >= spot * 0.85) & (strike_map["strike"] <= spot * 1.15)].copy()
     if nearby.empty:
         nearby = strike_map.copy()
+    nearby["call_gex_b"] = nearby["call_gex"] / 1000.0
+    nearby["put_gex_b"] = nearby["put_gex"] / 1000.0
     fig = go.Figure()
-    fig.add_bar(name="Call GEX", x=nearby["strike"], y=nearby["call_gex"], marker_color="#9fab95")
-    fig.add_bar(name="Put GEX", x=nearby["strike"], y=-nearby["put_gex"], marker_color="#f472b6")
+    fig.add_bar(name="Call GEX", x=nearby["strike"], y=nearby["call_gex_b"], marker_color="#9fab95")
+    fig.add_bar(name="Put GEX", x=nearby["strike"], y=-nearby["put_gex_b"], marker_color="#f472b6")
     fig.add_vline(x=spot, line_color="#e4eadf", line_dash="dash")
     fig.update_layout(
         barmode="relative",
@@ -1436,7 +1468,7 @@ def _build_gex_strike_chart(strike_map: pd.DataFrame, spot: float) -> go.Figure:
         font_color=APP_TEXT,
         margin=dict(l=30, r=20, t=60, b=30),
         xaxis_title="Strike",
-        yaxis_title="Approx GEX ($M)",
+        yaxis_title="Approx GEX ($B)",
         legend=dict(orientation="h"),
     )
     fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
@@ -1445,9 +1477,11 @@ def _build_gex_strike_chart(strike_map: pd.DataFrame, spot: float) -> go.Figure:
 
 
 def _build_expiry_map_chart(expiry_map: pd.DataFrame) -> go.Figure:
+    chart_df = expiry_map.copy()
+    chart_df["abs_gex_b"] = chart_df["abs_gex"] / 1000.0
     fig = go.Figure()
-    fig.add_bar(x=expiry_map["expiry_label"], y=expiry_map["abs_gex"], name="Abs GEX ($M)", marker_color="#dfe7d8")
-    fig.add_scatter(x=expiry_map["expiry_label"], y=expiry_map["total_oi"], name="OI (BTC)", mode="lines+markers", yaxis="y2", line=dict(color="#3b82f6"))
+    fig.add_bar(x=chart_df["expiry_label"], y=chart_df["abs_gex_b"], name="Abs GEX ($B)", marker_color="#dfe7d8")
+    fig.add_scatter(x=chart_df["expiry_label"], y=chart_df["total_oi"], name="OI (BTC)", mode="lines+markers", yaxis="y2", line=dict(color="#3b82f6"))
     fig.update_layout(
         title="Expiry Map",
         plot_bgcolor=APP_PANEL,
@@ -1455,7 +1489,7 @@ def _build_expiry_map_chart(expiry_map: pd.DataFrame) -> go.Figure:
         font_color=APP_TEXT,
         margin=dict(l=30, r=30, t=60, b=30),
         xaxis_title="Expiry",
-        yaxis_title="Abs GEX ($M)",
+        yaxis_title="Abs GEX ($B)",
         yaxis2=dict(title="OI (BTC)", overlaying="y", side="right", showgrid=False),
         legend=dict(orientation="h"),
     )
@@ -1525,7 +1559,7 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
     for _, row in levels.iterrows():
         distance = _safe_float(row.get("distance_pct"))
         st.markdown(
-            f"- `{row['strike']:,.0f}` | `{field}: {row[field]:.2f}M` | `OI: {row['total_oi']:.2f} BTC` | "
+            f"- `{row['strike']:,.0f}` | `{field}: {_format_gex_billions(row[field])}` | `OI: {row['total_oi']:.2f} BTC` | "
             f"`Distance: {distance:+.2f}%`"
         )
 
@@ -1565,7 +1599,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("BTC Spot", f"{spot:,.2f}")
     c2.metric("ATM IV", f"{float(atm_iv['mark_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a")
-    c3.metric("Net GEX Approx", f"{float(bundle['total_signed_gex']):+.2f}M")
+    c3.metric("Net GEX Approx", _format_gex_billions(float(bundle["total_signed_gex"]), signed=True))
     c4.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a")
     c5.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}")
     c6.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}")
@@ -1595,10 +1629,10 @@ def _render_btc_options_cockpit(anchor_mode: str):
     with flow_col:
         summary_rows = pd.DataFrame(
             [
-                {"Metric": "Total Signed GEX", "Value": f"{float(bundle['total_signed_gex']):+.2f}M"},
-                {"Metric": "Total Absolute GEX", "Value": f"{float(bundle['total_abs_gex']):.2f}M"},
-                {"Metric": "Call GEX", "Value": f"{float(bundle['call_gex']):.2f}M"},
-                {"Metric": "Put GEX", "Value": f"{float(bundle['put_gex']):.2f}M"},
+                {"Metric": "Total Signed GEX", "Value": _format_gex_billions(float(bundle["total_signed_gex"]), signed=True)},
+                {"Metric": "Total Absolute GEX", "Value": _format_gex_billions(float(bundle["total_abs_gex"]))},
+                {"Metric": "Call GEX", "Value": _format_gex_billions(float(bundle["call_gex"]))},
+                {"Metric": "Put GEX", "Value": _format_gex_billions(float(bundle["put_gex"]))},
                 {"Metric": "Top 5 Concentration", "Value": f"{float(bundle['top5_concentration']):.1%}"},
                 {"Metric": "Perp Mark / Index", "Value": f"{_safe_float(perp.get('mark_price')):,.2f} / {_safe_float(perp.get('index_price')):,.2f}"},
                 {"Metric": "Current OI Contracts", "Value": f"{_safe_float(perp.get('open_interest_contracts')):,.0f}"},
