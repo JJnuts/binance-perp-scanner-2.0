@@ -27,6 +27,7 @@ warnings.filterwarnings("ignore")
 
 BINANCE_BASE = "https://fapi.binance.com"
 DERIBIT_BASE = "https://www.deribit.com/api/v2"
+YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 INTERVAL = "1h"
 CANDLE_LIMIT = 240
 VWAP_FAST = 8
@@ -44,6 +45,7 @@ REFRESH_MS = 5 * 60 * 1000
 CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
+IBIT_SYMBOL = "IBIT"
 BTC_BUBBLE_LOOKBACK = 365
 BTC_OPTIONS_MAX_CONTRACTS = 180
 BTC_OPTIONS_MAX_DAYS = 120
@@ -354,6 +356,14 @@ def _get_deribit(method: str, params: Optional[dict] = None, timeout: int = API_
     if isinstance(response, dict) and "result" in response:
         return response["result"]
     return response
+
+
+def _get_yahoo_chart(symbol: str, range_: str, interval: str, timeout: int = API_TIMEOUT):
+    return _get_json_url(
+        f"{YAHOO_CHART_BASE}/{symbol}",
+        params={"range": range_, "interval": interval, "includePrePost": "false"},
+        timeout=timeout,
+    )
 
 
 def _inject_app_styles():
@@ -1383,6 +1393,83 @@ def _format_gex_billions(gex_millions: float, signed: bool = False) -> str:
     return f"{sign}{value:.2f}B"
 
 
+def _format_human_count(value: float, signed: bool = False, decimals: int = 2) -> str:
+    number = _safe_float(value)
+    abs_number = abs(number)
+    sign = ""
+    if signed and number > 0:
+        sign = "+"
+    if abs_number >= 1_000_000_000:
+        return f"{sign}{number / 1_000_000_000:.{decimals}f}B"
+    if abs_number >= 1_000_000:
+        return f"{sign}{number / 1_000_000:.{decimals}f}M"
+    if abs_number >= 1_000:
+        return f"{sign}{number / 1_000:.{decimals}f}K"
+    return f"{sign}{number:,.0f}"
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _build_ibit_context() -> dict[str, object]:
+    intraday = _get_yahoo_chart(IBIT_SYMBOL, "1d", "5m", timeout=20)
+    daily = _get_yahoo_chart(IBIT_SYMBOL, "3mo", "1d", timeout=20)
+
+    intraday_result = (((intraday or {}).get("chart") or {}).get("result") or [None])[0]
+    daily_result = (((daily or {}).get("chart") or {}).get("result") or [None])[0]
+    if intraday_result is None or daily_result is None:
+        return {"error": "IBIT data is unavailable from Yahoo right now."}
+
+    intraday_meta = intraday_result.get("meta", {}) or {}
+    intraday_quote = (((intraday_result.get("indicators") or {}).get("quote") or [None])[0] or {})
+    daily_quote = (((daily_result.get("indicators") or {}).get("quote") or [None])[0] or {})
+
+    current_price = _safe_float(intraday_meta.get("regularMarketPrice"))
+    previous_close = _safe_float(intraday_meta.get("chartPreviousClose")) or _safe_float(intraday_meta.get("previousClose"))
+    intraday_volumes = [float(v) for v in (intraday_quote.get("volume") or []) if v is not None]
+    session_volume = _safe_float(intraday_meta.get("regularMarketVolume"))
+    if session_volume <= 0.0 and intraday_volumes:
+        session_volume = float(sum(intraday_volumes))
+
+    daily_volumes = [float(v) for v in (daily_quote.get("volume") or []) if v is not None and float(v) > 0]
+    lookback = daily_volumes[-21:-1] if len(daily_volumes) >= 21 else daily_volumes[-20:]
+    avg_20d_volume = float(np.mean(lookback)) if lookback else 0.0
+
+    session_return = (current_price / previous_close - 1.0) if current_price > 0 and previous_close > 0 else 0.0
+    volume_ratio = (session_volume / avg_20d_volume) if session_volume > 0 and avg_20d_volume > 0 else 0.0
+
+    if session_volume <= 0:
+        flow_state = "Inactive"
+        flow_copy = "IBIT is not showing active session flow right now, so ETF tape is not adding much confirmation."
+    elif volume_ratio >= 1.25 and session_return > 0.002:
+        flow_state = "Supportive"
+        flow_copy = "IBIT volume is running above normal and price is green, which supports the BTC move rather than arguing against it."
+    elif volume_ratio >= 1.0 and session_return < -0.002:
+        flow_state = "Weak"
+        flow_copy = "IBIT volume is active but price is weak, which suggests ETF flow is not confirming BTC strength."
+    elif volume_ratio >= 1.0:
+        flow_state = "Active"
+        flow_copy = "IBIT is seeing healthy participation, but the ETF tape is not giving a one-sided directional message yet."
+    else:
+        flow_state = "Neutral"
+        flow_copy = "IBIT participation is below its usual pace, so ETF flow is not a strong confirmation signal yet."
+
+    market_time = intraday_meta.get("regularMarketTime")
+    market_ts = None
+    if market_time:
+        market_ts = pd.to_datetime(int(market_time), unit="s", utc=True).tz_localize(None)
+
+    return {
+        "price": current_price,
+        "previous_close": previous_close,
+        "session_return": session_return,
+        "session_volume": session_volume,
+        "avg_20d_volume": avg_20d_volume,
+        "volume_ratio": volume_ratio,
+        "flow_state": flow_state,
+        "flow_copy": flow_copy,
+        "market_ts": market_ts,
+    }
+
+
 def _fetch_binance_btc_perp_klines(interval: str = "5m", limit: int = BTC_OPTIONS_KLINE_LIMIT) -> pd.DataFrame:
     raw = _get_json("/fapi/v1/klines", params={"symbol": BTC_SYMBOL, "interval": interval, "limit": limit}, timeout=20)
     df = pd.DataFrame(
@@ -1602,6 +1689,7 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     )
 
     perp_snapshot = _fetch_binance_btc_perp_snapshot()
+    ibit_context = _build_ibit_context()
     fallback_spot = _safe_float(perp_snapshot.get("index_price")) or _safe_float(perp_snapshot.get("mark_price"))
     spot_series = options_df["underlying_price"].replace(0.0, np.nan)
     spot = float(spot_series.median()) if not spot_series.dropna().empty else fallback_spot
@@ -1688,6 +1776,7 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
         "put_gex": float(options_df["put_gex"].sum()),
         "top5_concentration": top5_concentration,
         "perp_snapshot": perp_snapshot,
+        "ibit_context": ibit_context,
         "anchor_ts": anchor_ts,
         "avwap_df": avwap_df,
         "sweeps": sweeps,
@@ -1978,6 +2067,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     support_levels = bundle.get("support_levels", pd.DataFrame())
     resistance_levels = bundle.get("resistance_levels", pd.DataFrame())
     perp = bundle.get("perp_snapshot", {})
+    ibit = bundle.get("ibit_context", {})
     funding_rate = _safe_float(perp.get("last_funding_rate"))
     oi_change_1h = _safe_float(bundle.get("oi_change_1h"))
     atm_iv = bundle.get("atm_iv", pd.DataFrame())
@@ -2015,6 +2105,11 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     funding_text = _jarvis_funding_read(funding_rate, oi_change_1h)
     iv_text = _jarvis_iv_read(atm_iv)
     sweep_text = _jarvis_sweep_read(sweeps)
+    ibit_state = str(ibit.get("flow_state", "Unavailable"))
+    ibit_copy = str(ibit.get("flow_copy", "IBIT flow context is unavailable right now."))
+    ibit_price = _safe_float(ibit.get("price"))
+    ibit_return = _safe_float(ibit.get("session_return"))
+    ibit_ratio = _safe_float(ibit.get("volume_ratio"))
 
     top_support = _safe_float(support_levels.iloc[0].get("strike")) if isinstance(support_levels, pd.DataFrame) and not support_levels.empty else 0.0
     top_resistance = _safe_float(resistance_levels.iloc[0].get("strike")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
@@ -2062,6 +2157,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
             <li><strong>VWAP:</strong> {escape(vwap_explainer)}</li>
             <li><strong>Funding / OI:</strong> {escape(funding_text)}</li>
             <li><strong>IV:</strong> {escape(iv_text)}</li>
+            <li><strong>IBIT:</strong> {escape(ibit_state)} flow. {escape(ibit_copy)} Current IBIT price is {ibit_price:,.2f} with session return {ibit_return:+.2%} and volume at {ibit_ratio:.2f}x its 20-day average.</li>
             <li><strong>Sweeps:</strong> {sweep_text}</li>
         </ul>
 
@@ -2130,6 +2226,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
     sweeps = bundle["sweeps"]
     support_levels = bundle["support_levels"]
     resistance_levels = bundle["resistance_levels"]
+    ibit = bundle["ibit_context"]
 
     st.subheader("BTC Options Screener")
     st.caption(
@@ -2182,6 +2279,26 @@ def _render_btc_options_cockpit(anchor_mode: str):
         )
         st.markdown("### Options / Perp Snapshot")
         _render_options_snapshot_table(summary_rows)
+
+    st.markdown("### IBIT Flow Context")
+    if isinstance(ibit, dict) and "error" in ibit:
+        st.caption(str(ibit["error"]))
+    else:
+        ib1, ib2, ib3, ib4, ib5 = st.columns(5)
+        ib1.metric("IBIT Price", f"{_safe_float(ibit.get('price')):,.2f}")
+        ib2.metric("Session Return", f"{_safe_float(ibit.get('session_return')):+.2%}")
+        ib3.metric("Session Volume", _format_human_count(_safe_float(ibit.get("session_volume"))))
+        ib4.metric("20D Avg Volume", _format_human_count(_safe_float(ibit.get("avg_20d_volume"))))
+        ib5.metric("ETF Flow", str(ibit.get("flow_state", "Unavailable")))
+        market_ts = ibit.get("market_ts")
+        if isinstance(market_ts, pd.Timestamp):
+            market_copy = market_ts.strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            market_copy = "latest available session data"
+        st.caption(
+            f"IBIT is used here as a US-session spot-demand confirmation layer. Volume is running at "
+            f"{_safe_float(ibit.get('volume_ratio')):.2f}x its 20-day average as of {market_copy}. {str(ibit.get('flow_copy', ''))}"
+        )
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
 
