@@ -628,6 +628,125 @@ def _inject_app_styles():
                 color: var(--app-text);
             }}
 
+            .jarvis-fab {{
+                position: fixed;
+                right: 1.2rem;
+                bottom: 1.2rem;
+                z-index: 999;
+                width: min(430px, calc(100vw - 2rem));
+            }}
+
+            .jarvis-fab > summary {{
+                list-style: none;
+                cursor: pointer;
+                margin-left: auto;
+                width: fit-content;
+                max-width: 100%;
+                background: rgba(17, 24, 17, 0.96);
+                border: 1px solid rgba(39, 50, 38, 0.92);
+                border-radius: 999px;
+                padding: 0.78rem 1rem;
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.94rem;
+                font-weight: 700;
+                box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+            }}
+
+            .jarvis-fab > summary::-webkit-details-marker {{
+                display: none;
+            }}
+
+            .jarvis-panel {{
+                margin-top: 0.75rem;
+                border: 1px solid rgba(39, 50, 38, 0.92);
+                border-radius: 10px;
+                background: rgba(12, 18, 12, 0.98);
+                box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+                overflow: hidden;
+            }}
+
+            .jarvis-panel-head {{
+                padding: 0.9rem 1rem 0.75rem 1rem;
+                border-bottom: 1px solid rgba(39, 50, 38, 0.72);
+                background: rgba(20, 29, 20, 0.94);
+            }}
+
+            .jarvis-panel-title {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 1rem;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin: 0 0 0.35rem 0;
+            }}
+
+            .jarvis-panel-copy {{
+                color: var(--app-muted);
+                font-size: 0.84rem;
+                line-height: 1.45;
+            }}
+
+            .jarvis-faq {{
+                padding: 0.85rem 1rem 1rem 1rem;
+            }}
+
+            .jarvis-faq-item {{
+                border: 1px solid rgba(39, 50, 38, 0.82);
+                border-radius: 8px;
+                background: rgba(17, 24, 17, 0.88);
+                overflow: hidden;
+            }}
+
+            .jarvis-faq-item > summary {{
+                list-style: none;
+                cursor: pointer;
+                padding: 0.82rem 0.9rem;
+                color: var(--app-text);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.88rem;
+                font-weight: 700;
+                line-height: 1.4;
+                background: rgba(20, 29, 20, 0.96);
+                border-bottom: 1px solid rgba(39, 50, 38, 0.72);
+            }}
+
+            .jarvis-faq-item > summary::-webkit-details-marker {{
+                display: none;
+            }}
+
+            .jarvis-faq-item > summary::before {{
+                content: "›";
+                display: inline-block;
+                margin-right: 0.45rem;
+                transition: transform 0.18s ease;
+            }}
+
+            .jarvis-faq-item[open] > summary::before {{
+                transform: rotate(90deg);
+            }}
+
+            .jarvis-answer {{
+                padding: 0.9rem 0.95rem 0.95rem 0.95rem;
+            }}
+
+            .jarvis-answer ul {{
+                margin: 0;
+                padding-left: 1.05rem;
+            }}
+
+            .jarvis-answer li {{
+                color: var(--app-text);
+                font-size: 0.84rem;
+                line-height: 1.52;
+                margin: 0 0 0.55rem 0;
+            }}
+
+            .jarvis-answer strong {{
+                color: var(--app-accent);
+            }}
+
             hr {{
                 border-color: rgba(39, 50, 38, 0.75);
             }}
@@ -1678,6 +1797,174 @@ def _render_options_snapshot_table(summary_rows: pd.DataFrame):
     )
 
 
+def _jarvis_vwap_read(latest: pd.Series) -> str:
+    close = _safe_float(latest.get("close"))
+    avwap = _safe_float(latest.get("avwap"))
+    band_1_up = _safe_float(latest.get("band_1_up"))
+    band_1_dn = _safe_float(latest.get("band_1_dn"))
+    band_2_up = _safe_float(latest.get("band_2_up"))
+    band_2_dn = _safe_float(latest.get("band_2_dn"))
+    if close >= band_2_up and band_2_up > 0:
+        return "price is above +2 sigma from anchored VWAP, which is stretched and easier to fade than chase"
+    if close <= band_2_dn and band_2_dn > 0:
+        return "price is below -2 sigma from anchored VWAP, which is stretched to the downside and vulnerable to snapback"
+    if close > band_1_up and band_1_up > 0:
+        return "price is above anchored VWAP and leaning strong, but already outside the first deviation band"
+    if close < band_1_dn and band_1_dn > 0:
+        return "price is below anchored VWAP and trading weak beneath the first deviation band"
+    if close >= avwap:
+        return "price is holding above anchored VWAP, which keeps intraday structure constructive"
+    return "price is below anchored VWAP, which keeps intraday structure softer unless VWAP is reclaimed"
+
+
+def _jarvis_funding_read(funding_rate: float, oi_change_1h: float) -> str:
+    abs_rate = abs(funding_rate)
+    if abs_rate < 0.0001:
+        funding_text = "funding is calm"
+    elif abs_rate < 0.0004:
+        funding_text = "funding is elevated but not extreme"
+    else:
+        funding_text = "funding is stretched and crowding risk is higher"
+
+    if oi_change_1h > 0.01:
+        oi_text = "OI is expanding, which means new exposure is joining the move"
+    elif oi_change_1h < -0.01:
+        oi_text = "OI is contracting, which points more toward de-risking or squeeze dynamics than clean new positioning"
+    else:
+        oi_text = "OI is roughly flat, so the tape is not showing a major fresh positioning surge right now"
+    return f"{funding_text}; {oi_text}."
+
+
+def _jarvis_iv_read(atm_iv: pd.DataFrame) -> str:
+    if atm_iv.empty:
+        return "ATM IV is unavailable from the current snapshot."
+    first_iv = _safe_float(atm_iv["effective_iv"].iloc[0])
+    last_iv = _safe_float(atm_iv["effective_iv"].iloc[-1])
+    slope = last_iv - first_iv
+    if slope > 2.0:
+        shape = "the IV curve is upward sloping, which usually means the front is calmer than later expiries"
+    elif slope < -2.0:
+        shape = "the IV curve is front-loaded, which usually means near-term stress or event premium is heavier"
+    else:
+        shape = "the IV curve is fairly flat, so there is no dramatic near-term vol distortion"
+    return f"Front ATM IV is {first_iv:.1f}; {shape}."
+
+
+def _jarvis_sweep_read(sweeps: pd.DataFrame) -> str:
+    if sweeps.empty:
+        return "No recent 5-minute sweep candidates were detected by the current wick, volume, and OI rules."
+    latest = sweeps.sort_values("ts").iloc[-1]
+    direction = str(latest.get("direction", "Sweep"))
+    broken_level = _safe_float(latest.get("broken_level"))
+    vol_z = _safe_float(latest.get("volume_z"))
+    taker_imb = _safe_float(latest.get("taker_imbalance"))
+    oi_delta = _safe_float(latest.get("oi_value_change"))
+    return (
+        f"Latest sweep signal is <strong>{escape(direction)}</strong> through {broken_level:,.0f}, "
+        f"with volume z-score {vol_z:.2f}, taker imbalance {taker_imb:+.2f}, and OI change {oi_delta:+.2%}."
+    )
+
+
+def _jarvis_level_line(levels: pd.DataFrame, field: str, label: str, metric_label: str) -> str:
+    if levels.empty:
+        return f"No nearby {label.lower()} level is available in the current GEX window."
+    top = levels.iloc[0]
+    strike = _safe_float(top.get("strike"))
+    gex = _format_gex_billions(_safe_float(top.get(field)))
+    distance = _safe_float(top.get("distance_pct"))
+    oi = _safe_float(top.get("total_oi"))
+    return f"Nearest high-probability {label.lower()} is {strike:,.0f} with {metric_label} {gex}, OI {oi:,.0f} BTC, and distance {distance:+.2f}%."
+
+
+def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
+    spot = _safe_float(bundle.get("spot"))
+    gamma_flip = bundle.get("gamma_flip")
+    signed_gex = _safe_float(bundle.get("total_signed_gex"))
+    support_levels = bundle.get("support_levels", pd.DataFrame())
+    resistance_levels = bundle.get("resistance_levels", pd.DataFrame())
+    perp = bundle.get("perp_snapshot", {})
+    funding_rate = _safe_float(perp.get("last_funding_rate"))
+    oi_change_1h = _safe_float(bundle.get("oi_change_1h"))
+    atm_iv = bundle.get("atm_iv", pd.DataFrame())
+    avwap_df = bundle.get("avwap_df", pd.DataFrame())
+    sweeps = bundle.get("sweeps", pd.DataFrame())
+
+    gex_regime = (
+        "net GEX is positive, which usually supports more pinning and mean reversion"
+        if signed_gex >= 0
+        else "net GEX is negative, which usually allows cleaner trend continuation and more volatility"
+    )
+    if gamma_flip:
+        flip_text = (
+            f"spot is above the gamma flip at {float(gamma_flip):,.0f}, which slightly favors pullback support over immediate breakdown"
+            if spot >= float(gamma_flip)
+            else f"spot is below the gamma flip at {float(gamma_flip):,.0f}, which means upside may stay more reactive until that level is reclaimed"
+        )
+    else:
+        flip_text = "gamma flip could not be resolved cleanly from the current strike map."
+
+    vwap_text = "Anchored VWAP state is unavailable."
+    if isinstance(avwap_df, pd.DataFrame) and not avwap_df.empty:
+        vwap_text = _jarvis_vwap_read(avwap_df.iloc[-1])
+
+    support_text = _jarvis_level_line(support_levels, "put_gex", "Support", "put GEX")
+    resistance_text = _jarvis_level_line(resistance_levels, "call_gex", "Resistance", "call GEX")
+    funding_text = _jarvis_funding_read(funding_rate, oi_change_1h)
+    iv_text = _jarvis_iv_read(atm_iv)
+    sweep_text = _jarvis_sweep_read(sweeps)
+
+    if gamma_flip and spot >= float(gamma_flip):
+        plan_text = (
+            f"For daytrading, treat {anchor_mode.lower()} AVWAP and the nearest support zone as the cleaner continuation area; "
+            "if price stays above VWAP and respects support, lean continuation before fade."
+        )
+    else:
+        plan_text = (
+            f"For daytrading, be more selective with longs until price reclaims {anchor_mode.lower()} AVWAP or the gamma flip; "
+            "until then, resistance reactions deserve more respect than blind breakout chasing."
+        )
+
+    bullets = [
+        f"<strong>Structure:</strong> {escape(gex_regime)}; {escape(flip_text)}.",
+        f"<strong>Anchored VWAP:</strong> {escape(vwap_text)}.",
+        f"<strong>Support / resistance:</strong> {escape(support_text)} {escape(resistance_text)}",
+        f"<strong>Perp context:</strong> {escape(funding_text)}",
+        f"<strong>IV read:</strong> {escape(iv_text)}",
+        f"<strong>Sweep read:</strong> {sweep_text}",
+        f"<strong>How to use it today:</strong> {escape(plan_text)}",
+    ]
+    return "".join(f"<li>{item}</li>" for item in bullets)
+
+
+def _render_jarvis_widget(bundle: dict[str, object], anchor_mode: str):
+    html_fn = getattr(st, "html", None)
+    render = html_fn if callable(html_fn) else lambda markup: st.markdown(markup, unsafe_allow_html=True)
+    summary_html = _build_jarvis_summary(bundle, anchor_mode)
+    render(
+        f"""
+        <details class="jarvis-fab">
+            <summary>Ask Jarvis</summary>
+            <div class="jarvis-panel">
+                <div class="jarvis-panel-head">
+                    <div class="jarvis-panel-title">Ask Jarvis</div>
+                    <div class="jarvis-panel-copy">Read-only live interpreter of the current BTC options screener state. It explains what the current snapshot is implying; it does not invent data or place trades for you.</div>
+                </div>
+                <div class="jarvis-faq">
+                    <details class="jarvis-faq-item" open>
+                        <summary>Summarise how to use current BTC options data in my daytrading</summary>
+                        <div class="jarvis-answer">
+                            <ul>
+                                {summary_html}
+                            </ul>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </details>
+        """
+    )
+
+
 def _render_btc_options_cockpit(anchor_mode: str):
     status = st.empty()
     status.info("Building BTC options screener from public Deribit + Binance data...")
@@ -1780,6 +2067,8 @@ def _render_btc_options_cockpit(anchor_mode: str):
             },
             height=260,
         )
+
+    _render_jarvis_widget(bundle, anchor_mode)
 
 def _render_term_guide():
     st.subheader("Glossary / Term Guide")
