@@ -1532,12 +1532,12 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
 
 def _render_btc_options_cockpit(anchor_mode: str):
     status = st.empty()
-    status.info("Building BTC options cockpit from public Deribit + Binance data...")
+    status.info("Building BTC options screener from public Deribit + Binance data...")
     try:
         bundle = build_btc_options_cockpit(anchor_mode)
     except Exception as exc:
         status.empty()
-        st.error(f"BTC options cockpit failed to load: {exc}")
+        st.error(f"BTC options screener failed to load: {exc}")
         st.caption("This page depends on live public Deribit and Binance endpoints. Try Force refresh in a moment.")
         return
     status.empty()
@@ -1556,7 +1556,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
     support_levels = bundle["support_levels"]
     resistance_levels = bundle["resistance_levels"]
 
-    st.subheader("BTC Options Cockpit")
+    st.subheader("BTC Options Screener")
     st.caption(
         "Phase 1 public-data framework using Deribit BTC options and Binance BTCUSDT perpetuals. "
         "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks."
@@ -2163,24 +2163,45 @@ def main():
 
     if "app_page" not in st.session_state:
         st.session_state["app_page"] = "Altcoins"
+    elif st.session_state["app_page"] == "BTC Options Cockpit":
+        st.session_state["app_page"] = "BTC Options Screener"
+
+    page = st.session_state["app_page"]
+    options_anchor_mode = "Weekly Open"
+    bitcoin_mode = "Bitcoin Spot Vol (Binance)"
+    bubble_timeframe = "1D"
+    bubble_lookback_days = 365
 
     with st.sidebar:
         if st.button("Force refresh"):
             st.cache_data.clear()
             st.rerun()
 
+        if st.button("📖 Glossary / Term Guide", use_container_width=True):
+            st.session_state["app_page"] = "Glossary / Term Guide"
+            st.rerun()
+
         st.divider()
-        page = st.radio(
-            "Page",
-            ["Altcoins", "BITCOIN", "BTC Options Cockpit", "Glossary / Term Guide"],
-            index=["Altcoins", "BITCOIN", "BTC Options Cockpit", "Glossary / Term Guide"].index(st.session_state["app_page"]),
-            key="app_page",
-        )
+
+        with st.expander("Altcoins", expanded=page == "Altcoins"):
+            if st.button("Altcoin Screener", key="page_altcoins", use_container_width=True):
+                st.session_state["app_page"] = "Altcoins"
+                st.rerun()
+
+        with st.expander("Bitcoin", expanded=page in {"BITCOIN", "BTC Options Screener"}):
+            if st.button("Bitcoin Spot Volume Bubblemap", key="page_bitcoin_bubble", use_container_width=True):
+                st.session_state["app_page"] = "BITCOIN"
+                st.rerun()
+            if st.button("BTC Options Screener", key="page_btc_options", use_container_width=True):
+                st.session_state["app_page"] = "BTC Options Screener"
+                st.rerun()
+
+        page = st.session_state["app_page"]
 
         if page == "Glossary / Term Guide":
             st.divider()
             st.caption("Reference page for all screener terms and score labels.")
-        elif page == "BTC Options Cockpit":
+        elif page == "BTC Options Screener":
             st.subheader("BTC Options")
             options_anchor_mode = st.radio(
                 "Anchored VWAP",
@@ -2259,7 +2280,7 @@ def main():
         _render_term_guide()
         return
 
-    if page == "BTC Options Cockpit":
+    if page == "BTC Options Screener":
         _render_btc_options_cockpit(options_anchor_mode)
         return
 
