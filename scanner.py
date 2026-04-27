@@ -2438,11 +2438,14 @@ def _render_btc_options_cockpit(anchor_mode: str):
     resistance_levels = bundle["resistance_levels"]
     ibit = bundle["ibit_context"]
 
-    st.subheader("BTC Options Screener")
+    st.title("BTC Options Screener")
     st.caption(
         "Phase 1 public-data framework using Deribit BTC options and Binance BTCUSDT perpetuals. "
         "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks."
     )
+
+    st.markdown("### Institutional Positioning Summary")
+    _render_institutional_positioning_summary(bundle)
 
     st.markdown("### IBIT Flow Context")
     if isinstance(ibit, dict) and "error" in ibit:
@@ -2463,9 +2466,6 @@ def _render_btc_options_cockpit(anchor_mode: str):
             f"IBIT is used here as a US-session spot-demand confirmation layer. Volume is running at "
             f"{_safe_float(ibit.get('volume_ratio')):.2f}x its 20-day average as of {market_copy}. {str(ibit.get('flow_copy', ''))}"
         )
-
-    st.markdown("### Institutional Positioning Summary")
-    _render_institutional_positioning_summary(bundle)
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("BTC Spot", f"{spot:,.2f}")
@@ -3063,12 +3063,6 @@ def main():
 
     st_autorefresh(interval=REFRESH_MS, key="scanner_refresh")
 
-    st.title("Binance Perp Scanner 2.0")
-    st.caption(
-        "Altcoin momentum screener for Binance USDT-M perps using BTC-relative strength, "
-        "volume expansion, EMA/VWAP trend, open interest, and funding quality."
-    )
-
     if "app_page" not in st.session_state:
         st.session_state["app_page"] = "Altcoins"
     elif st.session_state["app_page"] == "BTC Options Cockpit":
@@ -3185,6 +3179,7 @@ def main():
             st.caption("Data: Binance Futures public market data endpoints.")
 
     if page == "Glossary / Term Guide":
+        st.title("Binance Perp Scanner 2.0")
         _render_term_guide()
         return
 
@@ -3193,8 +3188,19 @@ def main():
         return
 
     if page == "BITCOIN":
+        st.title("Binance Perp Scanner 2.0")
+        st.caption(
+            "Altcoin momentum screener for Binance USDT-M perps using BTC-relative strength, "
+            "volume expansion, EMA/VWAP trend, open interest, and funding quality."
+        )
         _render_bitcoin_section(bitcoin_mode, bubble_timeframe, bubble_lookback_days)
         return
+
+    st.title("Binance Perp Scanner 2.0")
+    st.caption(
+        "Altcoin momentum screener for Binance USDT-M perps using BTC-relative strength, "
+        "volume expansion, EMA/VWAP trend, open interest, and funding quality."
+    )
 
     with st.spinner("Fetching active Binance perpetuals..."):
         try:
