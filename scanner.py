@@ -806,6 +806,83 @@ def _inject_app_styles():
                 color: var(--app-accent);
             }}
 
+            .positioning-grid {{
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 0.75rem;
+                margin: 0.85rem 0 1.15rem 0;
+            }}
+
+            @media (max-width: 1320px) {{
+                .positioning-grid {{
+                    grid-template-columns: repeat(3, minmax(0, 1fr));
+                }}
+            }}
+
+            @media (max-width: 900px) {{
+                .positioning-grid {{
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }}
+            }}
+
+            .positioning-card {{
+                border: 1px solid rgba(39, 50, 38, 0.88);
+                border-radius: 8px;
+                background: rgba(17, 24, 17, 0.92);
+                padding: 0.82rem 0.9rem 0.86rem 0.9rem;
+                min-height: 122px;
+            }}
+
+            .positioning-head {{
+                display: flex;
+                align-items: center;
+                gap: 0.55rem;
+                margin-bottom: 0.52rem;
+            }}
+
+            .positioning-dot {{
+                width: 14px;
+                height: 14px;
+                border-radius: 999px;
+                border: 1px solid rgba(228, 234, 223, 0.18);
+                flex: 0 0 auto;
+            }}
+
+            .positioning-title {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.82rem;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                line-height: 1.3;
+            }}
+
+            .positioning-status {{
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.98rem;
+                font-weight: 700;
+                margin-bottom: 0.35rem;
+            }}
+
+            .positioning-copy {{
+                color: var(--app-muted);
+                font-size: 0.79rem;
+                line-height: 1.46;
+            }}
+
+            .positioning-green {{
+                color: #7ef0a0;
+            }}
+
+            .positioning-yellow {{
+                color: #f4d35e;
+            }}
+
+            .positioning-red {{
+                color: #ff6b6b;
+            }}
+
             hr {{
                 border-color: rgba(39, 50, 38, 0.75);
             }}
@@ -2056,6 +2133,139 @@ def _jarvis_plain_vwap_state(latest: pd.Series) -> tuple[str, str]:
     )
 
 
+def _positioning_color(state: str) -> tuple[str, str]:
+    mapping = {
+        "green": ("#7ef0a0", "positioning-green"),
+        "yellow": ("#f4d35e", "positioning-yellow"),
+        "red": ("#ff6b6b", "positioning-red"),
+    }
+    return mapping.get(state, mapping["yellow"])
+
+
+def _build_institutional_positioning_cards(bundle: dict[str, object]) -> list[dict[str, str]]:
+    spot = _safe_float(bundle.get("spot"))
+    gamma_flip = bundle.get("gamma_flip")
+    signed_gex = _safe_float(bundle.get("total_signed_gex"))
+    support_levels = bundle.get("support_levels", pd.DataFrame())
+    resistance_levels = bundle.get("resistance_levels", pd.DataFrame())
+    perp = bundle.get("perp_snapshot", {})
+    ibit = bundle.get("ibit_context", {})
+    avwap_df = bundle.get("avwap_df", pd.DataFrame())
+    sweeps = bundle.get("sweeps", pd.DataFrame())
+
+    ibit_flow_state = str(ibit.get("flow_state", "Neutral"))
+    if ibit_flow_state == "Supportive":
+        ibit_state = "green"
+        ibit_status = "Bullish"
+    elif ibit_flow_state == "Weak":
+        ibit_state = "red"
+        ibit_status = "Bearish"
+    else:
+        ibit_state = "yellow"
+        ibit_status = "Neutral"
+    ibit_copy = str(ibit.get("flow_copy", "ETF flow is unavailable right now."))
+
+    if signed_gex > 0 and gamma_flip and spot >= float(gamma_flip):
+        gex_state = "green"
+        gex_status = "Constructive"
+        gex_copy = f"Positive net gamma and spot above the flip near {float(gamma_flip):,.0f} point to a calmer, more supportive options regime."
+    elif signed_gex < 0 and gamma_flip and spot < float(gamma_flip):
+        gex_state = "red"
+        gex_status = "Volatile"
+        gex_copy = f"Negative net gamma and spot below the flip near {float(gamma_flip):,.0f} favor faster moves and shakier downside reactions."
+    else:
+        gex_state = "yellow"
+        gex_status = "Mixed"
+        gex_copy = "Options structure is not cleanly one-sided right now, so use the strike map and perp tape together."
+
+    support_distance = _safe_float(support_levels.iloc[0].get("distance_pct")) if isinstance(support_levels, pd.DataFrame) and not support_levels.empty else 0.0
+    resistance_distance = _safe_float(resistance_levels.iloc[0].get("distance_pct")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
+    top_support = _safe_float(support_levels.iloc[0].get("strike")) if isinstance(support_levels, pd.DataFrame) and not support_levels.empty else 0.0
+    top_resistance = _safe_float(resistance_levels.iloc[0].get("strike")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
+    if top_support and spot > top_support and resistance_distance > 1.5:
+        levels_state = "green"
+        levels_status = "Room Above"
+        levels_copy = f"BTC is sitting above nearby support at {top_support:,.0f} with some room before the first major resistance at {top_resistance:,.0f}."
+    elif top_support and spot <= top_support:
+        levels_state = "red"
+        levels_status = "Fragile"
+        levels_copy = f"BTC is leaning on or below the nearest support zone around {top_support:,.0f}; breaks here deserve respect."
+    else:
+        levels_state = "yellow"
+        levels_status = "Trapped"
+        levels_copy = f"BTC is caught between nearby support and resistance. Expect more level-to-level behavior than open air movement."
+
+    funding_rate = abs(_safe_float(perp.get("last_funding_rate")))
+    oi_change_1h = _safe_float(bundle.get("oi_change_1h"))
+    if funding_rate < 0.0004 and 0.0 <= oi_change_1h <= 0.03:
+        perp_state = "green"
+        perp_status = "Healthy"
+        perp_copy = "Funding is not crowded and OI expansion still looks constructive rather than overheated."
+    elif funding_rate >= 0.0008 or oi_change_1h > 0.05:
+        perp_state = "red"
+        perp_status = "Crowded"
+        perp_copy = "Perp positioning looks stretched. Late leverage is more likely to destabilize the move than support it."
+    else:
+        perp_state = "yellow"
+        perp_status = "Mixed"
+        perp_copy = "Perp leverage is active, but not clean enough to call supportive or outright dangerous on its own."
+
+    if isinstance(avwap_df, pd.DataFrame) and not avwap_df.empty:
+        latest = avwap_df.iloc[-1]
+        close = _safe_float(latest.get("close"))
+        avwap = _safe_float(latest.get("avwap"))
+        band_2_up = _safe_float(latest.get("band_2_up"))
+        band_2_dn = _safe_float(latest.get("band_2_dn"))
+        latest_sweep = None if sweeps.empty else str(sweeps.sort_values("ts").iloc[-1].get("direction", ""))
+        if close > avwap and close < band_2_up and (latest_sweep.startswith("Down-sweep") or latest_sweep is None):
+            tape_state = "green"
+            tape_status = "Supportive"
+            tape_copy = "Price is above anchored VWAP and the latest tape does not show a fresh bearish rejection."
+        elif close < avwap and latest_sweep.startswith("Up-sweep"):
+            tape_state = "red"
+            tape_status = "Weak"
+            tape_copy = "Price is below anchored VWAP and the latest sweep behavior leans bearish, so upside needs cleaner proof."
+        else:
+            tape_state = "yellow"
+            tape_status = "Chop"
+            tape_copy = "VWAP and the latest sweep/tape behavior are mixed, so execution quality matters more than broad bias."
+    else:
+        tape_state = "yellow"
+        tape_status = "Mixed"
+        tape_copy = "Anchored VWAP context is unavailable right now."
+
+    cards = [
+        {"title": "IBIT Flow", "status": ibit_status, "state": ibit_state, "copy": ibit_copy},
+        {"title": "GEX Regime", "status": gex_status, "state": gex_state, "copy": gex_copy},
+        {"title": "Dealer Levels", "status": levels_status, "state": levels_state, "copy": levels_copy},
+        {"title": "Perp Positioning", "status": perp_status, "state": perp_state, "copy": perp_copy},
+        {"title": "VWAP / Tape", "status": tape_status, "state": tape_state, "copy": tape_copy},
+    ]
+    return cards
+
+
+def _render_institutional_positioning_summary(bundle: dict[str, object]):
+    html_fn = getattr(st, "html", None)
+    render = html_fn if callable(html_fn) else lambda markup: st.markdown(markup, unsafe_allow_html=True)
+    cards = _build_institutional_positioning_cards(bundle)
+    fragments = []
+    for card in cards:
+        dot_color, class_name = _positioning_color(str(card["state"]))
+        fragments.append(
+            f"""
+            <div class="positioning-card">
+                <div class="positioning-head">
+                    <span class="positioning-dot" style="background:{dot_color};"></span>
+                    <div class="positioning-title">{escape(str(card["title"]))}</div>
+                </div>
+                <div class="positioning-status {class_name}">{escape(str(card["status"]))}</div>
+                <div class="positioning-copy">{escape(str(card["copy"]))}</div>
+            </div>
+            """
+        )
+    render(f'<div class="positioning-grid">{"".join(fragments)}</div>')
+
+
 def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     spot = _safe_float(bundle.get("spot"))
     gamma_flip = bundle.get("gamma_flip")
@@ -2227,6 +2437,9 @@ def _render_btc_options_cockpit(anchor_mode: str):
     support_levels = bundle["support_levels"]
     resistance_levels = bundle["resistance_levels"]
     ibit = bundle["ibit_context"]
+
+    st.markdown("### Institutional Positioning Summary")
+    _render_institutional_positioning_summary(bundle)
 
     st.subheader("BTC Options Screener")
     st.caption(
