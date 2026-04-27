@@ -1399,6 +1399,12 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
         if col not in options_df.columns:
             options_df[col] = 0.0
 
+    options_df["effective_iv"] = options_df["mark_iv"]
+    zero_iv = options_df["effective_iv"].abs() < 1e-12
+    options_df.loc[zero_iv, "effective_iv"] = (
+        (options_df.loc[zero_iv, "bid_iv"] + options_df.loc[zero_iv, "ask_iv"]) / 2.0
+    )
+
     perp_snapshot = _fetch_binance_btc_perp_snapshot()
     fallback_spot = _safe_float(perp_snapshot.get("index_price")) or _safe_float(perp_snapshot.get("mark_price"))
     spot_series = options_df["underlying_price"].replace(0.0, np.nan)
@@ -1426,20 +1432,20 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
             signed_gex=("signed_gex", "sum"),
             abs_gex=("gex_abs", "sum"),
             total_oi=("open_interest", "sum"),
-            avg_iv=("mark_iv", "mean"),
+            avg_iv=("effective_iv", "mean"),
         )
         .sort_values("strike")
     )
     expiry_map = (
         options_df.groupby(["expiry_label", "expiration_ts"], as_index=False)
-        .agg(abs_gex=("gex_abs", "sum"), signed_gex=("signed_gex", "sum"), total_oi=("open_interest", "sum"), avg_iv=("mark_iv", "mean"))
+        .agg(abs_gex=("gex_abs", "sum"), signed_gex=("signed_gex", "sum"), total_oi=("open_interest", "sum"), avg_iv=("effective_iv", "mean"))
         .sort_values("expiration_ts")
     )
     atm_iv = (
         options_df.assign(distance=(options_df["strike"] - spot).abs())
         .sort_values(["expiration_ts", "distance"])
         .groupby("expiry_label", as_index=False)
-        .first()[["expiry_label", "expiration_ts", "mark_iv"]]
+        .first()[["expiry_label", "expiration_ts", "effective_iv"]]
         .sort_values("expiration_ts")
     )
 
@@ -1544,7 +1550,7 @@ def _build_expiry_map_chart(expiry_map: pd.DataFrame) -> go.Figure:
 
 def _build_iv_curve_chart(atm_iv: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    fig.add_scatter(x=atm_iv["expiry_label"], y=atm_iv["mark_iv"], mode="lines+markers", line=dict(color="#e4eadf"))
+    fig.add_scatter(x=atm_iv["expiry_label"], y=atm_iv["effective_iv"], mode="lines+markers", line=dict(color="#e4eadf"))
     fig.update_layout(
         title="ATM IV by Expiry",
         plot_bgcolor=APP_PANEL,
@@ -1552,7 +1558,7 @@ def _build_iv_curve_chart(atm_iv: pd.DataFrame) -> go.Figure:
         font_color=APP_TEXT,
         margin=dict(l=30, r=20, t=60, b=30),
         xaxis_title="Expiry",
-        yaxis_title="Mark IV",
+        yaxis_title="ATM IV",
     )
     fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
     fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
@@ -1596,11 +1602,12 @@ def _build_avwap_chart(avwap_df: pd.DataFrame, anchor_ts: pd.Timestamp) -> go.Fi
 
 
 def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
-    st.markdown(
+    html_fn = getattr(st, "html", None)
+    render = html_fn if callable(html_fn) else lambda markup: st.markdown(markup, unsafe_allow_html=True)
+    render(
         f"""
         <div class="gex-level-title">{title}</div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
     if levels.empty:
         st.caption("No levels found in the current simple GEX window.")
@@ -1618,13 +1625,12 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
             </div>
             """
         )
-    st.markdown(
+    render(
         f"""
         <div class="gex-level-list">
             {''.join(rows)}
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -1662,7 +1668,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("BTC Spot", f"{spot:,.2f}")
-    c2.metric("ATM IV", f"{float(atm_iv['mark_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a")
+    c2.metric("ATM IV", f"{float(atm_iv['effective_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a")
     c3.metric("Net GEX Approx", _format_gex_billions(float(bundle["total_signed_gex"]), signed=True))
     c4.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a")
     c5.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}")
