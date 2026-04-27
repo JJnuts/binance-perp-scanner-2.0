@@ -633,7 +633,7 @@ def _inject_app_styles():
                 right: 1.2rem;
                 bottom: 1.2rem;
                 z-index: 999;
-                width: min(430px, calc(100vw - 2rem));
+                width: min(360px, calc(100vw - 2rem));
             }}
 
             .jarvis-fab > summary {{
@@ -664,6 +664,9 @@ def _inject_app_styles():
                 background: rgba(12, 18, 12, 0.98);
                 box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
                 overflow: hidden;
+                max-height: min(68vh, 620px);
+                display: flex;
+                flex-direction: column;
             }}
 
             .jarvis-panel-head {{
@@ -690,6 +693,25 @@ def _inject_app_styles():
 
             .jarvis-faq {{
                 padding: 0.85rem 1rem 1rem 1rem;
+                overflow-y: auto;
+                max-height: calc(min(68vh, 620px) - 96px);
+                scrollbar-width: thin;
+                scrollbar-color: rgba(94, 111, 87, 0.9) rgba(17, 24, 17, 0.65);
+            }}
+
+            .jarvis-faq::-webkit-scrollbar {{
+                width: 10px;
+            }}
+
+            .jarvis-faq::-webkit-scrollbar-track {{
+                background: rgba(17, 24, 17, 0.65);
+                border-left: 1px solid rgba(39, 50, 38, 0.45);
+            }}
+
+            .jarvis-faq::-webkit-scrollbar-thumb {{
+                background: rgba(94, 111, 87, 0.9);
+                border-radius: 999px;
+                border: 2px solid rgba(17, 24, 17, 0.65);
             }}
 
             .jarvis-faq-item {{
