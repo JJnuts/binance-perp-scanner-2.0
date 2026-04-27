@@ -557,10 +557,10 @@ def _inject_app_styles():
             }}
 
             .gex-level-title {{
-                font-size: 1.55rem;
+                font-size: 1.32rem;
                 font-weight: 700;
                 color: var(--app-text);
-                margin: 0 0 0.8rem 0;
+                margin: 0 0 0.55rem 0;
             }}
 
             .gex-level-list {{
@@ -571,33 +571,33 @@ def _inject_app_styles():
             }}
 
             .gex-level-item {{
-                padding: 0.9rem 1rem;
+                padding: 0.76rem 0.85rem;
                 border: 1px solid rgba(39, 50, 38, 0.95);
                 border-radius: 6px;
                 background: rgba(17, 24, 17, 0.9);
-                line-height: 2.1;
-                font-size: 1.28rem;
+                line-height: 1.82;
+                font-size: 1.09rem;
                 color: var(--app-text);
             }}
 
             .gex-chip {{
                 display: inline-block;
-                margin: 0 0.5rem 0.4rem 0;
-                padding: 0.2rem 0.45rem;
+                margin: 0 0.42rem 0.34rem 0;
+                padding: 0.16rem 0.38rem;
                 border: 1px solid rgba(39, 50, 38, 0.95);
                 border-radius: 6px;
                 background: rgba(17, 24, 17, 0.9);
-                font-size: 1.28rem;
+                font-size: 1.09rem;
                 font-family: "IBM Plex Mono", "Consolas", monospace;
                 color: #7ef0a0;
             }}
 
             .options-snapshot-large [data-testid="stDataFrame"] {{
-                font-size: 1.32rem;
+                font-size: 1.12rem;
             }}
 
             .options-snapshot-large [data-testid="stDataFrame"] [role="columnheader"] {{
-                font-size: 1.16rem;
+                font-size: 0.98rem;
             }}
 
             hr {{
@@ -1604,11 +1604,6 @@ def _build_avwap_chart(avwap_df: pd.DataFrame, anchor_ts: pd.Timestamp) -> go.Fi
 def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
     html_fn = getattr(st, "html", None)
     render = html_fn if callable(html_fn) else lambda markup: st.markdown(markup, unsafe_allow_html=True)
-    render(
-        f"""
-        <div class="gex-level-title">{title}</div>
-        """
-    )
     if levels.empty:
         st.caption("No levels found in the current simple GEX window.")
         return
@@ -1711,7 +1706,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
         )
         st.markdown("### Options / Perp Snapshot")
         st.markdown('<div class="options-snapshot-large">', unsafe_allow_html=True)
-        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=380)
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=322)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
