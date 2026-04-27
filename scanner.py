@@ -564,13 +564,17 @@ def _inject_app_styles():
             }}
 
             .gex-level-list {{
-                list-style: disc;
+                display: flex;
+                flex-direction: column;
+                gap: 0.95rem;
                 margin: 0;
-                padding-left: 1.35rem;
             }}
 
             .gex-level-item {{
-                margin: 0 0 1rem 0;
+                padding: 0.9rem 1rem;
+                border: 1px solid rgba(39, 50, 38, 0.95);
+                border-radius: 6px;
+                background: rgba(17, 24, 17, 0.9);
                 line-height: 2.1;
                 font-size: 1.28rem;
                 color: var(--app-text);
@@ -1606,19 +1610,19 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
         distance = _safe_float(row.get("distance_pct"))
         rows.append(
             f"""
-            <li class="gex-level-item">
+            <div class="gex-level-item">
                 <span class="gex-chip">{row['strike']:,.0f}</span>
                 <span class="gex-chip">{field}: {_format_gex_billions(row[field])}</span>
                 <span class="gex-chip">OI: {row['total_oi']:.2f} BTC</span>
                 <span class="gex-chip">Distance: {distance:+.2f}%</span>
-            </li>
+            </div>
             """
         )
     st.markdown(
         f"""
-        <ul class="gex-level-list">
+        <div class="gex-level-list">
             {''.join(rows)}
-        </ul>
+        </div>
         """,
         unsafe_allow_html=True,
     )
