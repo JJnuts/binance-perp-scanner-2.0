@@ -556,6 +556,46 @@ def _inject_app_styles():
                 padding: 0 1rem 1rem 1rem;
             }}
 
+            .gex-level-title {{
+                font-size: 1.55rem;
+                font-weight: 700;
+                color: var(--app-text);
+                margin: 0 0 0.8rem 0;
+            }}
+
+            .gex-level-list {{
+                list-style: disc;
+                margin: 0;
+                padding-left: 1.35rem;
+            }}
+
+            .gex-level-item {{
+                margin: 0 0 1rem 0;
+                line-height: 2.1;
+                font-size: 1.28rem;
+                color: var(--app-text);
+            }}
+
+            .gex-chip {{
+                display: inline-block;
+                margin: 0 0.5rem 0.4rem 0;
+                padding: 0.2rem 0.45rem;
+                border: 1px solid rgba(39, 50, 38, 0.95);
+                border-radius: 6px;
+                background: rgba(17, 24, 17, 0.9);
+                font-size: 1.28rem;
+                font-family: "IBM Plex Mono", "Consolas", monospace;
+                color: #7ef0a0;
+            }}
+
+            .options-snapshot-large [data-testid="stDataFrame"] {{
+                font-size: 1.32rem;
+            }}
+
+            .options-snapshot-large [data-testid="stDataFrame"] [role="columnheader"] {{
+                font-size: 1.16rem;
+            }}
+
             hr {{
                 border-color: rgba(39, 50, 38, 0.75);
             }}
@@ -1552,16 +1592,36 @@ def _build_avwap_chart(avwap_df: pd.DataFrame, anchor_ts: pd.Timestamp) -> go.Fi
 
 
 def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
-    st.markdown(f"**{title}**")
+    st.markdown(
+        f"""
+        <div class="gex-level-title">{title}</div>
+        """,
+        unsafe_allow_html=True,
+    )
     if levels.empty:
         st.caption("No levels found in the current simple GEX window.")
         return
+    rows = []
     for _, row in levels.iterrows():
         distance = _safe_float(row.get("distance_pct"))
-        st.markdown(
-            f"- `{row['strike']:,.0f}` | `{field}: {_format_gex_billions(row[field])}` | `OI: {row['total_oi']:.2f} BTC` | "
-            f"`Distance: {distance:+.2f}%`"
+        rows.append(
+            f"""
+            <li class="gex-level-item">
+                <span class="gex-chip">{row['strike']:,.0f}</span>
+                <span class="gex-chip">{field}: {_format_gex_billions(row[field])}</span>
+                <span class="gex-chip">OI: {row['total_oi']:.2f} BTC</span>
+                <span class="gex-chip">Distance: {distance:+.2f}%</span>
+            </li>
+            """
         )
+    st.markdown(
+        f"""
+        <ul class="gex-level-list">
+            {''.join(rows)}
+        </ul>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_btc_options_cockpit(anchor_mode: str):
@@ -1640,7 +1700,9 @@ def _render_btc_options_cockpit(anchor_mode: str):
             ]
         )
         st.markdown("### Options / Perp Snapshot")
-        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=330)
+        st.markdown('<div class="options-snapshot-large">', unsafe_allow_html=True)
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=380)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
 
@@ -1650,6 +1712,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
     else:
         sweep_df = sweeps.copy()
         sweep_df["ts"] = sweep_df["ts"].dt.strftime("%Y-%m-%d %H:%M")
+        sweep_df["oi_value_change"] = sweep_df["oi_value_change"].map(lambda value: f"{float(value):+.2%}")
         st.dataframe(
             sweep_df.sort_values("ts", ascending=False),
             use_container_width=True,
@@ -1660,7 +1723,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
                 "close": st.column_config.NumberColumn("Close", format="%.2f"),
                 "volume_z": st.column_config.NumberColumn("Vol Z", format="%.2f"),
                 "taker_imbalance": st.column_config.NumberColumn("Taker Imb", format="%.2f"),
-                "oi_value_change": st.column_config.NumberColumn("OI Change", format="%.2%"),
+                "oi_value_change": st.column_config.TextColumn("OI Change"),
                 "broken_level": st.column_config.NumberColumn("Broken Level", format="%.2f"),
             },
             height=260,
