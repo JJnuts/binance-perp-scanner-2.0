@@ -9,6 +9,7 @@ No API key required.
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from html import escape
 from typing import Optional
 
 import numpy as np
@@ -598,6 +599,33 @@ def _inject_app_styles():
 
             .options-snapshot-large [data-testid="stDataFrame"] [role="columnheader"] {{
                 font-size: 0.98rem;
+            }}
+
+            .options-snapshot-table {{
+                width: 100%;
+                border-collapse: collapse;
+                border: 1px solid rgba(39, 50, 38, 0.85);
+                border-radius: 4px;
+                overflow: hidden;
+                background: rgba(17, 24, 17, 0.84);
+                font-family: "IBM Plex Mono", "Consolas", monospace;
+                font-size: 1.12rem;
+            }}
+
+            .options-snapshot-table thead th {{
+                text-align: left;
+                padding: 0.8rem 0.95rem;
+                font-size: 0.98rem;
+                font-weight: 600;
+                color: var(--app-muted);
+                background: rgba(28, 34, 28, 0.96);
+                border-bottom: 1px solid rgba(39, 50, 38, 0.8);
+            }}
+
+            .options-snapshot-table tbody td {{
+                padding: 0.82rem 0.95rem;
+                border-top: 1px solid rgba(39, 50, 38, 0.55);
+                color: var(--app-text);
             }}
 
             hr {{
@@ -1629,6 +1657,27 @@ def _render_gex_levels(levels: pd.DataFrame, title: str, field: str):
     )
 
 
+def _render_options_snapshot_table(summary_rows: pd.DataFrame):
+    html_fn = getattr(st, "html", None)
+    render = html_fn if callable(html_fn) else lambda markup: st.markdown(markup, unsafe_allow_html=True)
+    body_rows = "".join(
+        f"<tr><td>{escape(str(row['Metric']))}</td><td>{escape(str(row['Value']))}</td></tr>"
+        for _, row in summary_rows.iterrows()
+    )
+    render(
+        f"""
+        <table class="options-snapshot-table">
+            <thead>
+                <tr><th>Metric</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+                {body_rows}
+            </tbody>
+        </table>
+        """
+    )
+
+
 def _render_btc_options_cockpit(anchor_mode: str):
     status = st.empty()
     status.info("Building BTC options screener from public Deribit + Binance data...")
@@ -1705,9 +1754,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
             ]
         )
         st.markdown("### Options / Perp Snapshot")
-        st.markdown('<div class="options-snapshot-large">', unsafe_allow_html=True)
-        st.dataframe(summary_rows, use_container_width=True, hide_index=True, height=322)
-        st.markdown("</div>", unsafe_allow_html=True)
+        _render_options_snapshot_table(summary_rows)
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
 
