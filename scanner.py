@@ -743,6 +743,33 @@ def _inject_app_styles():
                 margin: 0 0 0.55rem 0;
             }}
 
+            .jarvis-answer h4 {{
+                color: var(--app-accent);
+                font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+                font-size: 0.86rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin: 0.95rem 0 0.42rem 0;
+            }}
+
+            .jarvis-answer h4:first-child {{
+                margin-top: 0;
+            }}
+
+            .jarvis-answer p {{
+                color: var(--app-text);
+                font-size: 0.84rem;
+                line-height: 1.5;
+                margin: 0 0 0.6rem 0;
+            }}
+
+            .jarvis-answer .jarvis-note {{
+                color: var(--app-muted);
+                font-size: 0.78rem;
+                line-height: 1.45;
+                margin-top: 0.8rem;
+            }}
+
             .jarvis-answer strong {{
                 color: var(--app-accent);
             }}
@@ -1876,10 +1903,56 @@ def _jarvis_level_line(levels: pd.DataFrame, field: str, label: str, metric_labe
     return f"Nearest high-probability {label.lower()} is {strike:,.0f} with {metric_label} {gex}, OI {oi:,.0f} BTC, and distance {distance:+.2f}%."
 
 
+def _jarvis_level_list(levels: pd.DataFrame, field: str, label: str) -> str:
+    if levels.empty:
+        return f"<li>No nearby {escape(label.lower())} levels are available in the current GEX window.</li>"
+    items = []
+    for _, row in levels.head(3).iterrows():
+        strike = _safe_float(row.get("strike"))
+        gex = _format_gex_billions(_safe_float(row.get(field)))
+        distance = _safe_float(row.get("distance_pct"))
+        items.append(
+            f"<li><strong>{strike:,.0f}</strong>: {gex} GEX, {distance:+.2f}% from spot.</li>"
+        )
+    return "".join(items)
+
+
+def _jarvis_plain_vwap_state(latest: pd.Series) -> tuple[str, str]:
+    close = _safe_float(latest.get("close"))
+    avwap = _safe_float(latest.get("avwap"))
+    band_1_up = _safe_float(latest.get("band_1_up"))
+    band_1_dn = _safe_float(latest.get("band_1_dn"))
+    band_2_up = _safe_float(latest.get("band_2_up"))
+    band_2_dn = _safe_float(latest.get("band_2_dn"))
+    if close >= band_2_up and band_2_up > 0:
+        return (
+            "stretched above anchored VWAP",
+            "BTC is trading above the +2 sigma VWAP band. That usually means the move is hot; chasing late longs is riskier unless price keeps accepting above the band.",
+        )
+    if close <= band_2_dn and band_2_dn > 0:
+        return (
+            "stretched below anchored VWAP",
+            "BTC is trading below the -2 sigma VWAP band. That usually means downside is extended; shorts need confirmation instead of blindly pressing lows.",
+        )
+    if close >= avwap:
+        return (
+            "above anchored VWAP",
+            "BTC is above anchored VWAP. For a novice read, that means buyers currently control the intraday average price from the selected anchor.",
+        )
+    return (
+        "below anchored VWAP",
+        "BTC is below anchored VWAP. For a novice read, that means sellers currently control the intraday average price from the selected anchor.",
+    )
+
+
 def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     spot = _safe_float(bundle.get("spot"))
     gamma_flip = bundle.get("gamma_flip")
     signed_gex = _safe_float(bundle.get("total_signed_gex"))
+    call_gex = _safe_float(bundle.get("call_gex"))
+    put_gex = _safe_float(bundle.get("put_gex"))
+    total_abs_gex = _safe_float(bundle.get("total_abs_gex"))
+    top5_concentration = _safe_float(bundle.get("top5_concentration"))
     support_levels = bundle.get("support_levels", pd.DataFrame())
     resistance_levels = bundle.get("resistance_levels", pd.DataFrame())
     perp = bundle.get("perp_snapshot", {})
@@ -1889,23 +1962,31 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     avwap_df = bundle.get("avwap_df", pd.DataFrame())
     sweeps = bundle.get("sweeps", pd.DataFrame())
 
-    gex_regime = (
-        "net GEX is positive, which usually supports more pinning and mean reversion"
-        if signed_gex >= 0
-        else "net GEX is negative, which usually allows cleaner trend continuation and more volatility"
-    )
-    if gamma_flip:
-        flip_text = (
-            f"spot is above the gamma flip at {float(gamma_flip):,.0f}, which slightly favors pullback support over immediate breakdown"
-            if spot >= float(gamma_flip)
-            else f"spot is below the gamma flip at {float(gamma_flip):,.0f}, which means upside may stay more reactive until that level is reclaimed"
+    if signed_gex < 0:
+        big_picture = (
+            "Put-side gamma is dominating this snapshot. In simple terms, the options map is more sensitive to downside levels, "
+            "and breaks below key support can become faster if perp flow confirms."
+        )
+    elif signed_gex > 0:
+        big_picture = (
+            "Call-side gamma is dominating this snapshot. In simple terms, upside strike zones matter more right now, "
+            "and BTC may react or slow down around the strongest resistance levels."
         )
     else:
-        flip_text = "gamma flip could not be resolved cleanly from the current strike map."
+        big_picture = "Net GEX is close to balanced, so the strike map is less directional and VWAP/perp flow deserve more weight."
 
-    vwap_text = "Anchored VWAP state is unavailable."
+    flip_read = "The gamma flip is not available, so do not use it as a trigger today."
+    if gamma_flip:
+        flip = float(gamma_flip)
+        if spot >= flip:
+            flip_read = f"BTC is above the gamma flip near {flip:,.0f}. Staying above it supports a more constructive intraday read."
+        else:
+            flip_read = f"BTC is below the gamma flip near {flip:,.0f}. Reclaiming it would improve the bullish read; rejection keeps pressure on."
+
+    vwap_label = "unavailable"
+    vwap_explainer = "Anchored VWAP is unavailable in this snapshot."
     if isinstance(avwap_df, pd.DataFrame) and not avwap_df.empty:
-        vwap_text = _jarvis_vwap_read(avwap_df.iloc[-1])
+        vwap_label, vwap_explainer = _jarvis_plain_vwap_state(avwap_df.iloc[-1])
 
     support_text = _jarvis_level_line(support_levels, "put_gex", "Support", "put GEX")
     resistance_text = _jarvis_level_line(resistance_levels, "call_gex", "Resistance", "call GEX")
@@ -1913,27 +1994,66 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     iv_text = _jarvis_iv_read(atm_iv)
     sweep_text = _jarvis_sweep_read(sweeps)
 
-    if gamma_flip and spot >= float(gamma_flip):
-        plan_text = (
-            f"For daytrading, treat {anchor_mode.lower()} AVWAP and the nearest support zone as the cleaner continuation area; "
-            "if price stays above VWAP and respects support, lean continuation before fade."
-        )
-    else:
-        plan_text = (
-            f"For daytrading, be more selective with longs until price reclaims {anchor_mode.lower()} AVWAP or the gamma flip; "
-            "until then, resistance reactions deserve more respect than blind breakout chasing."
-        )
+    top_support = _safe_float(support_levels.iloc[0].get("strike")) if isinstance(support_levels, pd.DataFrame) and not support_levels.empty else 0.0
+    top_resistance = _safe_float(resistance_levels.iloc[0].get("strike")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
 
-    bullets = [
-        f"<strong>Structure:</strong> {escape(gex_regime)}; {escape(flip_text)}.",
-        f"<strong>Anchored VWAP:</strong> {escape(vwap_text)}.",
-        f"<strong>Support / resistance:</strong> {escape(support_text)} {escape(resistance_text)}",
-        f"<strong>Perp context:</strong> {escape(funding_text)}",
-        f"<strong>IV read:</strong> {escape(iv_text)}",
-        f"<strong>Sweep read:</strong> {sweep_text}",
-        f"<strong>How to use it today:</strong> {escape(plan_text)}",
-    ]
-    return "".join(f"<li>{item}</li>" for item in bullets)
+    bullish_case = (
+        f"If BTC holds above {top_support:,.0f} and remains {vwap_label}, the cleaner long idea is a push toward {top_resistance:,.0f}."
+        if top_support and top_resistance
+        else f"If BTC holds above anchored VWAP, the bullish case improves; use the visible GEX resistance zones as upside checkpoints."
+    )
+    bearish_case = (
+        f"If BTC loses {top_support:,.0f} with weak VWAP structure and negative OI/funding confirmation, the next support zones become more important."
+        if top_support
+        else "If BTC loses anchored VWAP with weak perp flow, the bearish case improves; use the visible support zones as downside checkpoints."
+    )
+    resistance_case = (
+        f"If BTC reaches {top_resistance:,.0f}, watch whether it accepts above that level or rejects. Acceptance can open continuation; rejection makes it a fade/pullback zone."
+        if top_resistance
+        else "If BTC reaches a visible resistance zone, watch acceptance vs rejection rather than treating the level as guaranteed."
+    )
+
+    support_items = _jarvis_level_list(support_levels, "put_gex", "Support")
+    resistance_items = _jarvis_level_list(resistance_levels, "call_gex", "Resistance")
+
+    return f"""
+        <h4>Big Picture</h4>
+        <p><strong>Spot:</strong> {spot:,.2f}. <strong>Net GEX:</strong> {_format_gex_billions(signed_gex, signed=True)}. {escape(big_picture)}</p>
+        <p>{escape(flip_read)} Top-5 GEX concentration is {top5_concentration:.1%}, so a small number of strikes are carrying a meaningful part of the options pressure.</p>
+
+        <h4>What The Main Numbers Mean</h4>
+        <ul>
+            <li><strong>Total GEX:</strong> {_format_gex_billions(total_abs_gex)} tells you how large the visible gamma map is. Bigger values mean the options levels deserve more respect.</li>
+            <li><strong>Call GEX:</strong> {_format_gex_billions(call_gex)} marks upside call-heavy areas. These can behave like resistance, pinning, or breakout trigger zones.</li>
+            <li><strong>Put GEX:</strong> {_format_gex_billions(put_gex)} marks downside put-heavy areas. These can behave like support, magnets, or acceleration zones if broken.</li>
+        </ul>
+
+        <h4>Key Levels To Watch</h4>
+        <p><strong>Support zones:</strong></p>
+        <ul>{support_items}</ul>
+        <p><strong>Resistance zones:</strong></p>
+        <ul>{resistance_items}</ul>
+        <p>{escape(support_text)} {escape(resistance_text)}</p>
+
+        <h4>Intraday Read</h4>
+        <ul>
+            <li><strong>VWAP:</strong> {escape(vwap_explainer)}</li>
+            <li><strong>Funding / OI:</strong> {escape(funding_text)}</li>
+            <li><strong>IV:</strong> {escape(iv_text)}</li>
+            <li><strong>Sweeps:</strong> {sweep_text}</li>
+        </ul>
+
+        <h4>How To Use This Today</h4>
+        <ul>
+            <li><strong>Bullish scenario:</strong> {escape(bullish_case)}</li>
+            <li><strong>Bearish scenario:</strong> {escape(bearish_case)}</li>
+            <li><strong>Resistance test:</strong> {escape(resistance_case)}</li>
+        </ul>
+
+        <h4>Simple Summary</h4>
+        <p>Do not treat any GEX level as magic. Treat it as a map of where positioning is heavy. The best trade read comes when price reaction, VWAP, OI, funding, and sweep behavior agree around one of those levels.</p>
+        <p class="jarvis-note">This is a plain-English interpretation of the visible public-data screener. The GEX values are still a simple Deribit chain approximation, not exact dealer inventory.</p>
+    """
 
 
 def _render_jarvis_widget(bundle: dict[str, object], anchor_mode: str):
@@ -1953,9 +2073,7 @@ def _render_jarvis_widget(bundle: dict[str, object], anchor_mode: str):
                     <details class="jarvis-faq-item" open>
                         <summary>Summarise how to use current BTC options data in my daytrading</summary>
                         <div class="jarvis-answer">
-                            <ul>
-                                {summary_html}
-                            </ul>
+                            {summary_html}
                         </div>
                     </details>
                 </div>
