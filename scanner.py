@@ -30,6 +30,40 @@ DERIBIT_BASE = "https://www.deribit.com/api/v2"
 YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 INTERVAL = "1h"
 CANDLE_LIMIT = 240
+ETH_SYMBOL = "ETHUSDT"
+LTF_INTERVALS = ("5m", "15m", "1h")
+LTF_KLINE_LIMITS = {"5m": 240, "15m": 240, "1h": 240}
+LTF_OI_LIMIT = 120
+LTF_CACHE_TTL = 120
+ATR_PERIOD = 14
+ATR_PERCENTILE_LOOKBACK = 120
+ATR_ROC_LOOKBACK = 3
+COMPRESSION_RECENT_BARS = {"5m": 18, "15m": 12, "1h": 8}
+RANGE_LOOKBACK_BARS = {"5m": 36, "15m": 24, "1h": 24}
+RS_LOOKBACK_BARS = {"5m": 12, "15m": 8, "1h": 4}
+ATR_ROC_THRESHOLD = 0.08
+VOLUME_Z_THRESHOLD = 2.0
+OI_Z_THRESHOLD = 2.0
+LTF_ALPHA_WEIGHTS = {"1h": 0.20, "4h": 0.45, "24h": 0.35}
+HTF_ALPHA_WEIGHTS = {"24h": 0.50, "72h": 0.30, "168h": 0.20}
+VOL_ADJUSTED_WEIGHTS = {"24h": 0.35, "72h": 0.35, "168h": 0.30}
+LTF_RS_WEIGHTS = {"1h": 0.20, "4h": 0.45, "24h": 0.35}
+HTF_RS_WEIGHTS = {"24h": 0.50, "72h": 0.30, "168h": 0.20}
+VOLUME_BLEND_WEIGHTS = {"ratio": 0.60, "zscore": 0.40}
+TREND_BLEND_WEIGHTS = {"ema20": 0.30, "ema36": 0.20, "ema50": 0.15, "alignment": 0.20, "vwap": 0.15}
+HTF_TREND_BLEND_WEIGHTS = {"ema36": 0.30, "ema50": 0.25, "alignment": 0.25, "vwap": 0.20}
+OVEREXTENSION_WEIGHTS = {"vwap": 0.45, "ema20": 0.25, "ema36": 0.15, "ret_1h": 0.15}
+MOMENTUM_SCORE_WEIGHTS = {"alpha": 0.25, "rs": 0.15, "volume": 0.25, "trend": 0.20, "oi": 0.10, "funding": 0.05}
+HTF_MOMENTUM_SCORE_WEIGHTS = {
+    "alpha": 0.30,
+    "vol_adjusted": 0.20,
+    "rs": 0.20,
+    "trend": 0.15,
+    "oi": 0.10,
+    "funding": 0.05,
+}
+SETUP_OVEREXTENSION_PENALTY = 0.45
+HTF_SETUP_OVEREXTENSION_PENALTY = 0.40
 VWAP_FAST = 8
 VWAP_SLOW = 24
 VWAP_HTF = 120
@@ -135,8 +169,24 @@ TERM_GUIDE = [
         "Primary low-timeframe score. It blends beta-adjusted alpha, raw relative strength vs BTC, volume expansion, trend structure, open-interest expansion, and funding quality into one 0-100 ranking.",
     ),
     (
+        "LTF Scalping",
+        "Renamed low-timeframe dashboard. It keeps the original LTF momentum model and adds the native 5m/15m/1h LTF Ignition regime scan above it.",
+    ),
+    (
         "HTF Momentum",
         "Higher-timeframe leadership score. It leans more heavily on 24H/72H/7D behavior, cleaner trend structure, and volatility-adjusted persistence rather than short-term ignition.",
+    ),
+    (
+        "LTF Ignition",
+        "Native lower-timeframe regime scan. It looks for recent ATR compression followed by ATR expansion, volume/OI z-score spikes, VWAP/range break, and BTC/ETH relative-strength confirmation.",
+    ),
+    (
+        "HTF Expansion",
+        "Higher-timeframe context scan derived from the existing 1H history. It highlights ATR compression/expansion, broader structure breaks, participation, and relative strength.",
+    ),
+    (
+        "Best Setups",
+        "Combined view that ranks accurate LTF ignition against HTF expansion or compression context. The strongest rows align lower-timeframe trigger with higher-timeframe regime.",
     ),
     (
         "Overext",
@@ -263,8 +313,12 @@ TERM_GUIDE_GROUPS = [
     (
         "Scores",
         [
+            ("LTF Scalping", "Renamed LTF dashboard. It keeps the classic LTF model and adds the accurate native LTF Ignition scanner above it."),
             ("Momentum", "Primary LTF ranking. It blends alpha, RS vs BTC, volume, trend, OI, and funding quality into one 0-100 score."),
             ("HTF Momentum", "Higher-timeframe leadership score. It favors cleaner 24H to 7D strength over short bursts."),
+            ("LTF Ignition", "Native 5m/15m/1h regime score for compression resolving into expansion."),
+            ("HTF Expansion", "Lighter HTF context score for compression/expansion and broader structure."),
+            ("Best Setups", "Combined score for accurate LTF ignition with supportive HTF context."),
             ("Overext", "Overextension score. Higher values mean the move is more stretched and vulnerable to snapback."),
             ("Setup", "LTF setup score. It rewards strong momentum while penalizing names that already look too extended."),
             ("HTF Setup", "HTF version of Setup. It starts from the higher-timeframe model instead of the LTF model."),
@@ -802,6 +856,12 @@ def _inject_app_styles():
                 margin-top: 0.8rem;
             }}
 
+            .jarvis-answer .jarvis-simple-summary {{
+                color: var(--app-muted);
+                font-size: 0.67rem;
+                line-height: 1.38;
+            }}
+
             .jarvis-answer strong {{
                 color: var(--app-accent);
             }}
@@ -922,8 +982,8 @@ def fetch_ticker_stats() -> dict[str, dict[str, float]]:
     return out
 
 
-def _fetch_klines(symbol: str) -> Optional[pd.DataFrame]:
-    params = {"symbol": symbol, "interval": INTERVAL, "limit": CANDLE_LIMIT}
+def _fetch_klines_interval(symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     raw = _get_json("/fapi/v1/klines", params=params, timeout=12)
     if not isinstance(raw, list) or len(raw) < EMA_SLOW + 5:
         return None
@@ -952,16 +1012,29 @@ def _fetch_klines(symbol: str) -> Optional[pd.DataFrame]:
     return df.set_index("ts")[["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"]]
 
 
-def _fetch_open_interest_hist(symbol: str) -> tuple[float, float]:
-    params = {"symbol": symbol, "period": OI_PERIOD, "limit": OI_LOOKBACK}
+def _fetch_klines(symbol: str) -> Optional[pd.DataFrame]:
+    return _fetch_klines_interval(symbol, INTERVAL, CANDLE_LIMIT)
+
+
+def _fetch_open_interest_hist_frame(symbol: str, period: str, limit: int) -> pd.DataFrame:
+    params = {"symbol": symbol, "period": period, "limit": limit}
     raw = _get_json("/futures/data/openInterestHist", params=params, timeout=12)
     if not isinstance(raw, list) or len(raw) < 2:
+        return pd.DataFrame(columns=["ts", "oi_value"])
+
+    df = pd.DataFrame(raw)
+    df["ts"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df["oi_value"] = df["sumOpenInterestValue"].astype(float)
+    return df.set_index("ts")[["oi_value"]].sort_index()
+
+
+def _fetch_open_interest_hist(symbol: str) -> tuple[float, float]:
+    df = _fetch_open_interest_hist_frame(symbol, OI_PERIOD, OI_LOOKBACK)
+    if df.empty or len(df) < 2:
         return 0.0, 0.0
 
-    latest = raw[-1]
-    previous = raw[-2]
-    latest_value = float(latest.get("sumOpenInterestValue", 0.0) or 0.0)
-    prev_value = float(previous.get("sumOpenInterestValue", 0.0) or 0.0)
+    latest_value = float(df["oi_value"].iloc[-1])
+    prev_value = float(df["oi_value"].iloc[-2])
     if prev_value <= 0:
         return latest_value, 0.0
     return latest_value, (latest_value / prev_value) - 1.0
@@ -1010,6 +1083,35 @@ def fetch_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, objec
     return out
 
 
+def _fetch_ltf_symbol_context(symbol: str) -> tuple[str, dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    klines: dict[str, pd.DataFrame] = {}
+    oi_hist: dict[str, pd.DataFrame] = {}
+    for interval in LTF_INTERVALS:
+        try:
+            df = _fetch_klines_interval(symbol, interval, LTF_KLINE_LIMITS[interval])
+            if df is not None and not df.empty:
+                klines[interval] = df
+        except Exception:
+            continue
+        try:
+            oi_hist[interval] = _fetch_open_interest_hist_frame(symbol, interval, LTF_OI_LIMIT)
+        except Exception:
+            oi_hist[interval] = pd.DataFrame()
+    return symbol, klines, oi_hist
+
+
+@st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
+def fetch_ltf_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_ltf_symbol_context, symbol): symbol for symbol in symbols}
+        for fut in as_completed(futures):
+            symbol, klines, oi_hist = fut.result()
+            if klines:
+                out[symbol] = {"klines": klines, "oi_hist": oi_hist}
+    return out
+
+
 def _vwap(df: pd.DataFrame, n: int) -> float:
     tail = df.tail(n)
     tp = (tail["high"] + tail["low"] + tail["close"]) / 3.0
@@ -1041,8 +1143,8 @@ def _return_n(series: pd.Series, n: int) -> float:
     return float(series.iloc[-1] / prev - 1.0)
 
 
-def _beta_adjusted_alpha(asset_close: pd.Series, btc_close: pd.Series, n: int, beta_lookback: int = 72) -> float:
-    merged = pd.concat(
+def _aligned_return_frame(asset_close: pd.Series, btc_close: pd.Series) -> pd.DataFrame:
+    return pd.concat(
         [
             asset_close.pct_change().rename("asset"),
             btc_close.pct_change().rename("btc"),
@@ -1050,14 +1152,25 @@ def _beta_adjusted_alpha(asset_close: pd.Series, btc_close: pd.Series, n: int, b
         axis=1,
         join="inner",
     ).dropna()
-    if len(merged) < 12:
-        beta = 1.0
-    else:
-        window = merged.tail(min(beta_lookback, len(merged)))
-        btc_var = float(window["btc"].var())
-        beta = 1.0 if btc_var < 1e-12 else float(window["asset"].cov(window["btc"]) / btc_var)
 
+
+def _estimate_beta(aligned_returns: pd.DataFrame, beta_lookback: int = 72) -> float:
+    if len(aligned_returns) < 12:
+        return 1.0
+
+    window = aligned_returns.tail(min(beta_lookback, len(aligned_returns)))
+    btc_var = float(window["btc"].var())
+    return 1.0 if btc_var < 1e-12 else float(window["asset"].cov(window["btc"]) / btc_var)
+
+
+def _alpha_from_beta(asset_close: pd.Series, btc_close: pd.Series, n: int, beta: float) -> float:
     return _return_n(asset_close, n) - beta * _return_n(btc_close, n)
+
+
+def _beta_adjusted_alpha(asset_close: pd.Series, btc_close: pd.Series, n: int, beta_lookback: int = 72) -> float:
+    merged = _aligned_return_frame(asset_close, btc_close)
+    beta = _estimate_beta(merged, beta_lookback)
+    return _alpha_from_beta(asset_close, btc_close, n, beta)
 
 
 def _vol_adjusted_return(series: pd.Series, n: int) -> float:
@@ -1089,6 +1202,225 @@ def _volume_zscore(series: pd.Series, lookback: int = VOLUME_LOOKBACK) -> float:
     if std < 1e-12:
         return 0.0
     return float((tail.iloc[-1] - float(baseline.mean())) / std)
+
+
+def _rolling_zscore(series: pd.Series, lookback: int = VOLUME_LOOKBACK) -> pd.Series:
+    baseline_mean = series.shift(1).rolling(lookback).mean()
+    baseline_std = series.shift(1).rolling(lookback).std()
+    return ((series - baseline_mean) / (baseline_std + 1e-10)).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
+def _atr_series(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
+
+def _rolling_percentile(series: pd.Series, lookback: int = ATR_PERCENTILE_LOOKBACK) -> pd.Series:
+    def _percentile(values: np.ndarray) -> float:
+        current = values[-1]
+        if np.isnan(current):
+            return 50.0
+        valid = values[~np.isnan(values)]
+        if len(valid) < 5:
+            return 50.0
+        return float((valid <= current).mean() * 100.0)
+
+    return series.rolling(lookback, min_periods=max(20, ATR_PERIOD + 2)).apply(_percentile, raw=True).fillna(50.0)
+
+
+def _score_from_threshold(value: float, threshold: float, cap: float) -> float:
+    if threshold <= 0:
+        return 0.0
+    return float(np.clip((value / threshold) * cap, 0.0, 100.0))
+
+
+def _compression_score(atr_percentile: float, volume_zscore: float, oi_zscore: float) -> float:
+    atr_component = np.clip((35.0 - atr_percentile) / 35.0, 0.0, 1.0)
+    volume_component = np.clip((0.75 - max(volume_zscore, 0.0)) / 0.75, 0.0, 1.0)
+    oi_component = np.clip((0.75 - abs(oi_zscore)) / 0.75, 0.0, 1.0)
+    return float((0.55 * atr_component + 0.25 * volume_component + 0.20 * oi_component) * 100.0)
+
+
+def _range_context(df: pd.DataFrame, lookback: int, atr_value: float) -> tuple[float, float, float, float]:
+    if len(df) <= lookback:
+        return 0.0, 0.0, 0.5, 0.0
+
+    prior = df.iloc[-lookback - 1 : -1]
+    price = float(df["close"].iloc[-1])
+    range_high = float(prior["high"].max())
+    range_low = float(prior["low"].min())
+    range_width = max(range_high - range_low, 0.0)
+    denom = max(atr_value, 1e-12)
+
+    if price > range_high:
+        breakout_distance = (price - range_high) / denom
+    elif price < range_low:
+        breakout_distance = (price - range_low) / denom
+    else:
+        breakout_distance = 0.0
+
+    if range_width <= 1e-12:
+        range_position = 0.5
+    else:
+        range_position = float(np.clip((price - range_low) / range_width, 0.0, 1.0))
+    return range_high, range_low, range_position, float(range_width / denom)
+
+
+def _oi_zscore(oi_df: pd.DataFrame, lookback: int = VOLUME_LOOKBACK) -> tuple[float, pd.Series]:
+    if oi_df.empty or len(oi_df) < lookback + 2:
+        return 0.0, pd.Series(dtype=float)
+    oi_change = oi_df["oi_value"].pct_change().replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    z_series = _rolling_zscore(oi_change, lookback)
+    return float(z_series.iloc[-1]), z_series
+
+
+def _ltf_interval_metrics(
+    symbol: str,
+    interval: str,
+    df: pd.DataFrame,
+    oi_df: pd.DataFrame,
+    btc_df: pd.DataFrame,
+    eth_df: Optional[pd.DataFrame],
+) -> dict[str, object]:
+    atr = _atr_series(df)
+    atr_value = float(atr.iloc[-1]) if not atr.empty and pd.notna(atr.iloc[-1]) else 0.0
+    atr_percentile_series = _rolling_percentile(atr)
+    atr_percentile = float(atr_percentile_series.iloc[-1]) if not atr_percentile_series.empty else 50.0
+    if len(atr) > ATR_ROC_LOOKBACK and float(atr.iloc[-1 - ATR_ROC_LOOKBACK]) > 1e-12:
+        atr_roc = float(atr.iloc[-1] / atr.iloc[-1 - ATR_ROC_LOOKBACK] - 1.0)
+    else:
+        atr_roc = 0.0
+
+    volume_z_series = _rolling_zscore(df["quote_vol"], VOLUME_LOOKBACK)
+    volume_zscore = float(volume_z_series.iloc[-1]) if not volume_z_series.empty else 0.0
+    oi_zscore, oi_z_series = _oi_zscore(oi_df, VOLUME_LOOKBACK)
+    price = float(df["close"].iloc[-1])
+    vwap = _vwap(df, min(VWAP_SLOW, len(df)))
+    price_distance_from_vwap_atr = (price - vwap) / max(atr_value, 1e-12)
+
+    range_high, range_low, range_position, range_width_atr = _range_context(
+        df,
+        RANGE_LOOKBACK_BARS.get(interval, 24),
+        atr_value,
+    )
+    if price > range_high and range_high > 0:
+        breakout_distance_atr = (price - range_high) / max(atr_value, 1e-12)
+    elif price < range_low and range_low > 0:
+        breakout_distance_atr = (price - range_low) / max(atr_value, 1e-12)
+    else:
+        breakout_distance_atr = 0.0
+
+    lookback = RS_LOOKBACK_BARS.get(interval, 4)
+    ret = _return_n(df["close"], lookback)
+    btc_ret = _return_n(btc_df["close"], lookback) if btc_df is not None and not btc_df.empty else 0.0
+    eth_ret = _return_n(eth_df["close"], lookback) if eth_df is not None and not eth_df.empty else 0.0
+    rs_vs_btc = ret - btc_ret
+    rs_vs_eth = ret - eth_ret
+
+    compression_recent_bars = 0
+    if not atr_percentile_series.empty and not volume_z_series.empty:
+        recent_len = COMPRESSION_RECENT_BARS.get(interval, 12)
+        atr_recent = atr_percentile_series.tail(recent_len)
+        volume_recent = volume_z_series.tail(recent_len)
+        if oi_z_series.empty:
+            oi_recent = pd.Series(0.0, index=atr_recent.index)
+        else:
+            oi_recent = oi_z_series.reindex(atr_recent.index, method="nearest").fillna(0.0)
+        compression_series = (atr_recent < 20.0) & (volume_recent < 0.5) & (oi_recent.abs() < 0.5)
+        compression_recent_bars = int(compression_series.sum())
+
+    atr_compression_score = _compression_score(atr_percentile, volume_zscore, oi_zscore)
+    atr_expansion_score = _score_from_threshold(max(atr_roc, 0.0), ATR_ROC_THRESHOLD, 70.0)
+    volume_spike_score = _score_from_threshold(max(volume_zscore, 0.0), VOLUME_Z_THRESHOLD, 80.0)
+    oi_spike_score = _score_from_threshold(max(oi_zscore, 0.0), OI_Z_THRESHOLD, 80.0)
+    range_break_score = _score_from_threshold(abs(breakout_distance_atr), 0.50, 75.0)
+    rs_long_score = float(np.clip((rs_vs_btc * 800.0) + (rs_vs_eth * 500.0), 0.0, 100.0))
+    rs_short_score = float(np.clip((-rs_vs_btc * 800.0) + (-rs_vs_eth * 500.0), 0.0, 100.0))
+
+    expansion_ready = atr_roc > ATR_ROC_THRESHOLD and compression_recent_bars > 0
+    long_trigger = (
+        expansion_ready
+        and volume_zscore > VOLUME_Z_THRESHOLD
+        and oi_zscore > OI_Z_THRESHOLD
+        and price > vwap
+        and breakout_distance_atr > 0.0
+        and rs_vs_btc > 0.0
+    )
+    short_trigger = (
+        expansion_ready
+        and volume_zscore > VOLUME_Z_THRESHOLD
+        and oi_zscore > OI_Z_THRESHOLD
+        and price < vwap
+        and breakout_distance_atr < 0.0
+        and rs_vs_btc < 0.0
+    )
+
+    long_score = (
+        0.20 * min(100.0, compression_recent_bars * 18.0)
+        + 0.20 * atr_expansion_score
+        + 0.20 * volume_spike_score
+        + 0.15 * oi_spike_score
+        + 0.15 * range_break_score
+        + 0.10 * rs_long_score
+    )
+    short_score = (
+        0.20 * min(100.0, compression_recent_bars * 18.0)
+        + 0.20 * atr_expansion_score
+        + 0.20 * volume_spike_score
+        + 0.15 * oi_spike_score
+        + 0.15 * range_break_score
+        + 0.10 * rs_short_score
+    )
+
+    if long_trigger:
+        ignition_state = "Long ignition"
+        ignition_score = max(long_score, 75.0)
+    elif short_trigger:
+        ignition_state = "Short ignition"
+        ignition_score = max(short_score, 75.0)
+    elif compression_recent_bars > 0 and atr_percentile < 25.0:
+        ignition_state = "Compression"
+        ignition_score = max(atr_compression_score * 0.55, long_score, short_score)
+    elif long_score >= short_score and long_score >= 45.0:
+        ignition_state = "Long watch"
+        ignition_score = long_score
+    elif short_score > long_score and short_score >= 45.0:
+        ignition_state = "Short watch"
+        ignition_score = short_score
+    else:
+        ignition_state = "Neutral"
+        ignition_score = max(long_score, short_score)
+
+    return {
+        "symbol": symbol,
+        "timeframe": interval,
+        "ignition_state": ignition_state,
+        "ignition_score": float(np.clip(ignition_score, 0.0, 100.0)),
+        "long_ignition_score": float(np.clip(long_score, 0.0, 100.0)),
+        "short_ignition_score": float(np.clip(short_score, 0.0, 100.0)),
+        "atr_value": atr_value,
+        "atr_percentile": atr_percentile,
+        "atr_compression_score": atr_compression_score,
+        "atr_roc": atr_roc,
+        "atr_expansion_score": atr_expansion_score,
+        "volume_zscore": volume_zscore,
+        "oi_zscore": oi_zscore,
+        "price_distance_from_vwap_atr": price_distance_from_vwap_atr,
+        "breakout_distance_atr": breakout_distance_atr,
+        "range_position": range_position,
+        "range_width_atr": range_width_atr,
+        "compression_recent_bars": compression_recent_bars,
+        "rs_vs_btc": rs_vs_btc,
+        "rs_vs_eth": rs_vs_eth,
+    }
 
 
 def _tanh_scale(value: float, scale: float) -> float:
@@ -2105,6 +2437,59 @@ def _jarvis_level_list(levels: pd.DataFrame, field: str, label: str) -> str:
     return "".join(items)
 
 
+def _jarvis_dealer_hedging_section(
+    spot: float,
+    gamma_flip: object,
+    signed_gex: float,
+    support_levels: pd.DataFrame,
+    resistance_levels: pd.DataFrame,
+) -> str:
+    flip = float(gamma_flip) if gamma_flip else 0.0
+    top_support = _safe_float(support_levels.iloc[0].get("strike")) if isinstance(support_levels, pd.DataFrame) and not support_levels.empty else 0.0
+    top_resistance = _safe_float(resistance_levels.iloc[0].get("strike")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
+    support_gex = _format_gex_billions(_safe_float(support_levels.iloc[0].get("put_gex"))) if top_support else "n/a"
+    resistance_gex = _format_gex_billions(_safe_float(resistance_levels.iloc[0].get("call_gex"))) if top_resistance else "n/a"
+
+    if signed_gex > 0 and (not flip or spot >= flip):
+        regime = "The visible map leans long gamma / stabilizing."
+        dealer_action = "Dealers are more likely to lean against moves: selling strength and buying weakness."
+        regime_effect = "That can compress volatility and help price stay range-bound around heavy strikes."
+    elif signed_gex < 0 and (not flip or spot < flip):
+        regime = "The visible map leans short gamma / unstable."
+        dealer_action = "Dealers are more likely to chase the move: buying as price rises and selling as price falls."
+        regime_effect = "That can expand volatility once a key level breaks."
+    else:
+        regime = "The visible map is mixed."
+        dealer_action = "Dealer hedging pressure is less one-sided right now."
+        regime_effect = "The important read is whether price accepts above resistance or loses support with perp flow confirming."
+
+    flip_line = (
+        f"The gamma flip near {flip:,.0f} is the main regime switch. Above it, hedge flow should be more stabilizing; below it, hedge flow can become more momentum-following."
+        if flip
+        else "No clean gamma flip is available in this snapshot, so use the nearest support and resistance zones as the practical hedge-pressure levels."
+    )
+    downside_line = (
+        f"If BTC loses {top_support:,.0f}, the put-heavy support zone ({support_gex}) is the key downside hedge trigger. A clean break below it can make dealers sell into weakness, especially if spot is also below the gamma flip."
+        if top_support
+        else "No clean downside put-heavy support zone is available in this snapshot."
+    )
+    upside_line = (
+        f"If BTC pushes into {top_resistance:,.0f}, the call-heavy resistance zone ({resistance_gex}) is the key upside hedge zone. In a long-gamma regime this can force selling into strength and create pinning; a clean acceptance through it weakens that cap."
+        if top_resistance
+        else "No clean upside call-heavy resistance zone is available in this snapshot."
+    )
+
+    return f"""
+        <h4>Dealer Hedging Pressure</h4>
+        <p>{escape(regime)} <strong>{escape(dealer_action)}</strong> {escape(regime_effect)}</p>
+        <ul>
+            <li><strong>Regime switch:</strong> {escape(flip_line)}</li>
+            <li><strong>Downside trigger:</strong> {escape(downside_line)}</li>
+            <li><strong>Upside hedge zone:</strong> {escape(upside_line)}</li>
+        </ul>
+    """
+
+
 def _jarvis_plain_vwap_state(latest: pd.Series) -> tuple[str, str]:
     close = _safe_float(latest.get("close"))
     avwap = _safe_float(latest.get("avwap"))
@@ -2270,9 +2655,6 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     spot = _safe_float(bundle.get("spot"))
     gamma_flip = bundle.get("gamma_flip")
     signed_gex = _safe_float(bundle.get("total_signed_gex"))
-    call_gex = _safe_float(bundle.get("call_gex"))
-    put_gex = _safe_float(bundle.get("put_gex"))
-    total_abs_gex = _safe_float(bundle.get("total_abs_gex"))
     top5_concentration = _safe_float(bundle.get("top5_concentration"))
     support_levels = bundle.get("support_levels", pd.DataFrame())
     resistance_levels = bundle.get("resistance_levels", pd.DataFrame())
@@ -2281,7 +2663,6 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     funding_rate = _safe_float(perp.get("last_funding_rate"))
     oi_change_1h = _safe_float(bundle.get("oi_change_1h"))
     atm_iv = bundle.get("atm_iv", pd.DataFrame())
-    avwap_df = bundle.get("avwap_df", pd.DataFrame())
     sweeps = bundle.get("sweeps", pd.DataFrame())
 
     if signed_gex < 0:
@@ -2295,7 +2676,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
             "and BTC may react or slow down around the strongest resistance levels."
         )
     else:
-        big_picture = "Net GEX is close to balanced, so the strike map is less directional and VWAP/perp flow deserve more weight."
+        big_picture = "Net GEX is close to balanced, so the strike map is less directional and perp flow deserves more weight."
 
     flip_read = "The gamma flip is not available, so do not use it as a trigger today."
     if gamma_flip:
@@ -2304,11 +2685,6 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
             flip_read = f"BTC is above the gamma flip near {flip:,.0f}. Staying above it supports a more constructive intraday read."
         else:
             flip_read = f"BTC is below the gamma flip near {flip:,.0f}. Reclaiming it would improve the bullish read; rejection keeps pressure on."
-
-    vwap_label = "unavailable"
-    vwap_explainer = "Anchored VWAP is unavailable in this snapshot."
-    if isinstance(avwap_df, pd.DataFrame) and not avwap_df.empty:
-        vwap_label, vwap_explainer = _jarvis_plain_vwap_state(avwap_df.iloc[-1])
 
     support_text = _jarvis_level_line(support_levels, "put_gex", "Support", "put GEX")
     resistance_text = _jarvis_level_line(resistance_levels, "call_gex", "Resistance", "call GEX")
@@ -2325,14 +2701,14 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
     top_resistance = _safe_float(resistance_levels.iloc[0].get("strike")) if isinstance(resistance_levels, pd.DataFrame) and not resistance_levels.empty else 0.0
 
     bullish_case = (
-        f"If BTC holds above {top_support:,.0f} and remains {vwap_label}, the cleaner long idea is a push toward {top_resistance:,.0f}."
+        f"If BTC holds above {top_support:,.0f} and flow stays supportive, the cleaner long idea is a push toward {top_resistance:,.0f}."
         if top_support and top_resistance
-        else f"If BTC holds above anchored VWAP, the bullish case improves; use the visible GEX resistance zones as upside checkpoints."
+        else "If BTC holds its intraday structure, the bullish case improves; use the visible GEX resistance zones as upside checkpoints."
     )
     bearish_case = (
-        f"If BTC loses {top_support:,.0f} with weak VWAP structure and negative OI/funding confirmation, the next support zones become more important."
+        f"If BTC loses {top_support:,.0f} with weak tape and negative OI/funding confirmation, the next support zones become more important."
         if top_support
-        else "If BTC loses anchored VWAP with weak perp flow, the bearish case improves; use the visible support zones as downside checkpoints."
+        else "If BTC loses intraday structure with weak perp flow, the bearish case improves; use the visible support zones as downside checkpoints."
     )
     resistance_case = (
         f"If BTC reaches {top_resistance:,.0f}, watch whether it accepts above that level or rejects. Acceptance can open continuation; rejection makes it a fade/pullback zone."
@@ -2342,18 +2718,18 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
 
     support_items = _jarvis_level_list(support_levels, "put_gex", "Support")
     resistance_items = _jarvis_level_list(resistance_levels, "call_gex", "Resistance")
+    dealer_hedging_section = _jarvis_dealer_hedging_section(
+        spot,
+        gamma_flip,
+        signed_gex,
+        support_levels,
+        resistance_levels,
+    )
 
     return f"""
         <h4>Big Picture</h4>
         <p><strong>Spot:</strong> {spot:,.2f}. <strong>Net GEX:</strong> {_format_gex_billions(signed_gex, signed=True)}. {escape(big_picture)}</p>
         <p>{escape(flip_read)} Top-5 GEX concentration is {top5_concentration:.1%}, so a small number of strikes are carrying a meaningful part of the options pressure.</p>
-
-        <h4>What The Main Numbers Mean</h4>
-        <ul>
-            <li><strong>Total GEX:</strong> {_format_gex_billions(total_abs_gex)} tells you how large the visible gamma map is. Bigger values mean the options levels deserve more respect.</li>
-            <li><strong>Call GEX:</strong> {_format_gex_billions(call_gex)} marks upside call-heavy areas. These can behave like resistance, pinning, or breakout trigger zones.</li>
-            <li><strong>Put GEX:</strong> {_format_gex_billions(put_gex)} marks downside put-heavy areas. These can behave like support, magnets, or acceleration zones if broken.</li>
-        </ul>
 
         <h4>Key Levels To Watch</h4>
         <p><strong>Support zones:</strong></p>
@@ -2362,9 +2738,10 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         <ul>{resistance_items}</ul>
         <p>{escape(support_text)} {escape(resistance_text)}</p>
 
+        {dealer_hedging_section}
+
         <h4>Intraday Read</h4>
         <ul>
-            <li><strong>VWAP:</strong> {escape(vwap_explainer)}</li>
             <li><strong>Funding / OI:</strong> {escape(funding_text)}</li>
             <li><strong>IV:</strong> {escape(iv_text)}</li>
             <li><strong>IBIT:</strong> {escape(ibit_state)} flow. {escape(ibit_copy)} Current IBIT price is {ibit_price:,.2f} with session return {ibit_return:+.2%} and volume at {ibit_ratio:.2f}x its 20-day average.</li>
@@ -2379,8 +2756,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         </ul>
 
         <h4>Simple Summary</h4>
-        <p>Do not treat any GEX level as magic. Treat it as a map of where positioning is heavy. The best trade read comes when price reaction, VWAP, OI, funding, and sweep behavior agree around one of those levels.</p>
-        <p class="jarvis-note">This is a plain-English interpretation of the visible public-data screener. The GEX values are still a simple Deribit chain approximation, not exact dealer inventory.</p>
+        <p class="jarvis-simple-summary">Do not treat any GEX level as magic. Treat it as a map of where dealer hedging pressure may appear. The highest-alpha read is whether price is entering a stabilizing zone where hedging can compress the move, or breaking into an unstable zone where hedging can fuel expansion.</p>
     """
 
 
@@ -2578,7 +2954,7 @@ def _term_help(term: str) -> str:
                 return description
     fallback = {
         "Overall HTF Strength": "Single summary of the asset's higher-timeframe momentum profile. In this view it is the HTF Momentum score.",
-        "Overall LTF Strength": "Single summary of the asset's lower-timeframe momentum profile. In this view it is the LTF Momentum score.",
+        "Overall LTF Strength": "Single summary of the asset's lower-timeframe momentum profile. In this view it is the LTF Scalping score.",
         "Symbol": "Binance USDT-M perpetual contract symbol.",
     }
     return fallback.get(term, "")
@@ -2657,11 +3033,16 @@ def build_metrics(
         rs_24h = ret_24h - btc_ret_24h
         rs_72h = ret_72h - btc_ret_72h
         rs_168h = ret_168h - btc_ret_168h
-        alpha_1h = _beta_adjusted_alpha(close, btc_close, 1, beta_lookback=72)
-        alpha_4h = _beta_adjusted_alpha(close, btc_close, 4, beta_lookback=72)
-        alpha_24h = _beta_adjusted_alpha(close, btc_close, 24, beta_lookback=96)
-        alpha_72h = _beta_adjusted_alpha(close, btc_close, 72, beta_lookback=168)
-        alpha_168h = _beta_adjusted_alpha(close, btc_close, 168, beta_lookback=216)
+        aligned_returns = _aligned_return_frame(close, btc_close)
+        beta_by_lookback = {
+            lookback: _estimate_beta(aligned_returns, lookback)
+            for lookback in (72, 96, 168, 216)
+        }
+        alpha_1h = _alpha_from_beta(close, btc_close, 1, beta_by_lookback[72])
+        alpha_4h = _alpha_from_beta(close, btc_close, 4, beta_by_lookback[72])
+        alpha_24h = _alpha_from_beta(close, btc_close, 24, beta_by_lookback[96])
+        alpha_72h = _alpha_from_beta(close, btc_close, 72, beta_by_lookback[168])
+        alpha_168h = _alpha_from_beta(close, btc_close, 168, beta_by_lookback[216])
         vol_adj_4h = _vol_adjusted_return(close, 4)
         vol_adj_24h = _vol_adjusted_return(close, 24)
         vol_adj_72h = _vol_adjusted_return(close, 72)
@@ -2672,6 +3053,20 @@ def build_metrics(
         z_fast = _vwap_zscore(df, VWAP_FAST)
         z_slow = _vwap_zscore(df, VWAP_SLOW)
         z_htf = _vwap_zscore(df, VWAP_HTF)
+        atr_1h = _atr_series(df)
+        htf_atr_value = float(atr_1h.iloc[-1]) if not atr_1h.empty and pd.notna(atr_1h.iloc[-1]) else 0.0
+        htf_atr_percentile = float(_rolling_percentile(atr_1h).iloc[-1]) if not atr_1h.empty else 50.0
+        if len(atr_1h) > 12 and float(atr_1h.iloc[-13]) > 1e-12:
+            htf_atr_roc = float(atr_1h.iloc[-1] / atr_1h.iloc[-13] - 1.0)
+        else:
+            htf_atr_roc = 0.0
+        htf_range_high, htf_range_low, htf_range_position, htf_range_width_atr = _range_context(df, 72, htf_atr_value)
+        if price > htf_range_high and htf_range_high > 0:
+            htf_breakout_distance_atr = (price - htf_range_high) / max(htf_atr_value, 1e-12)
+        elif price < htf_range_low and htf_range_low > 0:
+            htf_breakout_distance_atr = (price - htf_range_low) / max(htf_atr_value, 1e-12)
+        else:
+            htf_breakout_distance_atr = 0.0
 
         dist_ema20 = (price / ema20 - 1.0) if ema20 else 0.0
         dist_ema36 = (price / ema36 - 1.0) if ema36 else 0.0
@@ -2682,32 +3077,104 @@ def build_metrics(
             + float(ema36 > ema50)
         ) / 3.0
 
-        ltf_alpha_raw = 0.20 * alpha_1h + 0.45 * alpha_4h + 0.35 * alpha_24h
-        htf_alpha_raw = 0.50 * alpha_24h + 0.30 * alpha_72h + 0.20 * alpha_168h
-        vol_adjusted_raw = 0.35 * vol_adj_24h + 0.35 * vol_adj_72h + 0.30 * vol_adj_168h
-        rs_raw = 0.20 * rs_1h + 0.45 * rs_4h + 0.35 * rs_24h
-        htf_rs_raw = 0.50 * rs_24h + 0.30 * rs_72h + 0.20 * rs_168h
-        volume_raw = 0.60 * _tanh_scale(volume_ratio_1h - 1.0, 1.25) + 0.40 * _tanh_scale(volume_z_1h, 0.40)
+        ltf_alpha_raw = (
+            LTF_ALPHA_WEIGHTS["1h"] * alpha_1h
+            + LTF_ALPHA_WEIGHTS["4h"] * alpha_4h
+            + LTF_ALPHA_WEIGHTS["24h"] * alpha_24h
+        )
+        htf_alpha_raw = (
+            HTF_ALPHA_WEIGHTS["24h"] * alpha_24h
+            + HTF_ALPHA_WEIGHTS["72h"] * alpha_72h
+            + HTF_ALPHA_WEIGHTS["168h"] * alpha_168h
+        )
+        vol_adjusted_raw = (
+            VOL_ADJUSTED_WEIGHTS["24h"] * vol_adj_24h
+            + VOL_ADJUSTED_WEIGHTS["72h"] * vol_adj_72h
+            + VOL_ADJUSTED_WEIGHTS["168h"] * vol_adj_168h
+        )
+        rs_raw = LTF_RS_WEIGHTS["1h"] * rs_1h + LTF_RS_WEIGHTS["4h"] * rs_4h + LTF_RS_WEIGHTS["24h"] * rs_24h
+        htf_rs_raw = (
+            HTF_RS_WEIGHTS["24h"] * rs_24h
+            + HTF_RS_WEIGHTS["72h"] * rs_72h
+            + HTF_RS_WEIGHTS["168h"] * rs_168h
+        )
+        volume_raw = (
+            VOLUME_BLEND_WEIGHTS["ratio"] * _tanh_scale(volume_ratio_1h - 1.0, 1.25)
+            + VOLUME_BLEND_WEIGHTS["zscore"] * _tanh_scale(volume_z_1h, 0.40)
+        )
         trend_raw = (
-            0.30 * _tanh_scale(dist_ema20, 35.0)
-            + 0.20 * _tanh_scale(dist_ema36, 30.0)
-            + 0.15 * _tanh_scale(dist_ema50, 25.0)
-            + 0.20 * ema_alignment
-            + 0.15 * _tanh_scale(max(z_fast, 0.0), 0.60)
+            TREND_BLEND_WEIGHTS["ema20"] * _tanh_scale(dist_ema20, 35.0)
+            + TREND_BLEND_WEIGHTS["ema36"] * _tanh_scale(dist_ema36, 30.0)
+            + TREND_BLEND_WEIGHTS["ema50"] * _tanh_scale(dist_ema50, 25.0)
+            + TREND_BLEND_WEIGHTS["alignment"] * ema_alignment
+            + TREND_BLEND_WEIGHTS["vwap"] * _tanh_scale(max(z_fast, 0.0), 0.60)
         )
         htf_trend_raw = (
-            0.30 * _tanh_scale(dist_ema36, 30.0)
-            + 0.25 * _tanh_scale(dist_ema50, 25.0)
-            + 0.25 * ema_alignment
-            + 0.20 * _tanh_scale(max(z_htf, 0.0), 0.35)
+            HTF_TREND_BLEND_WEIGHTS["ema36"] * _tanh_scale(dist_ema36, 30.0)
+            + HTF_TREND_BLEND_WEIGHTS["ema50"] * _tanh_scale(dist_ema50, 25.0)
+            + HTF_TREND_BLEND_WEIGHTS["alignment"] * ema_alignment
+            + HTF_TREND_BLEND_WEIGHTS["vwap"] * _tanh_scale(max(z_htf, 0.0), 0.35)
         )
         oi_raw = _tanh_scale(oi_change, 8.0)
         overextension_raw = (
-            0.45 * max(z_slow, 0.0)
-            + 0.25 * max(dist_ema20, 0.0) * 40.0
-            + 0.15 * max(dist_ema36, 0.0) * 35.0
-            + 0.15 * max(ret_1h, 0.0) * 30.0
+            OVEREXTENSION_WEIGHTS["vwap"] * max(z_slow, 0.0)
+            + OVEREXTENSION_WEIGHTS["ema20"] * max(dist_ema20, 0.0) * 40.0
+            + OVEREXTENSION_WEIGHTS["ema36"] * max(dist_ema36, 0.0) * 35.0
+            + OVEREXTENSION_WEIGHTS["ret_1h"] * max(ret_1h, 0.0) * 30.0
         )
+        htf_atr_compression_score = _compression_score(htf_atr_percentile, volume_z_1h, oi_raw)
+        htf_atr_expansion_score = _score_from_threshold(max(htf_atr_roc, 0.0), 0.18, 75.0)
+        htf_range_break_score = _score_from_threshold(abs(htf_breakout_distance_atr), 0.65, 80.0)
+        htf_long_structure_score = float(
+            np.clip(
+                40.0 * float(price > ema36)
+                + 25.0 * float(ema36 > ema50)
+                + 20.0 * max(z_htf, 0.0)
+                + 15.0 * max(htf_range_position - 0.50, 0.0) * 2.0,
+                0.0,
+                100.0,
+            )
+        )
+        htf_short_structure_score = float(
+            np.clip(
+                40.0 * float(price < ema36)
+                + 25.0 * float(ema36 < ema50)
+                + 20.0 * max(-z_htf, 0.0)
+                + 15.0 * max(0.50 - htf_range_position, 0.0) * 2.0,
+                0.0,
+                100.0,
+            )
+        )
+        htf_long_rs_score = float(np.clip((rs_24h * 500.0) + (rs_72h * 350.0) + (rs_168h * 250.0), 0.0, 100.0))
+        htf_short_rs_score = float(np.clip((-rs_24h * 500.0) + (-rs_72h * 350.0) + (-rs_168h * 250.0), 0.0, 100.0))
+        htf_long_expansion_score = (
+            0.20 * htf_atr_compression_score
+            + 0.20 * htf_atr_expansion_score
+            + 0.20 * volume_raw * 100.0
+            + 0.15 * max(oi_raw, 0.0) * 100.0
+            + 0.15 * htf_long_structure_score
+            + 0.10 * htf_long_rs_score
+        )
+        htf_short_expansion_score = (
+            0.20 * htf_atr_compression_score
+            + 0.20 * htf_atr_expansion_score
+            + 0.20 * volume_raw * 100.0
+            + 0.15 * max(oi_raw, 0.0) * 100.0
+            + 0.15 * htf_short_structure_score
+            + 0.10 * htf_short_rs_score
+        )
+        if htf_long_expansion_score >= htf_short_expansion_score and htf_long_expansion_score >= 45.0:
+            htf_expansion_direction = "Long expansion"
+            htf_expansion_score = htf_long_expansion_score
+        elif htf_short_expansion_score > htf_long_expansion_score and htf_short_expansion_score >= 45.0:
+            htf_expansion_direction = "Short expansion"
+            htf_expansion_score = htf_short_expansion_score
+        elif htf_atr_percentile < 25.0:
+            htf_expansion_direction = "Compression"
+            htf_expansion_score = htf_atr_compression_score * 0.60
+        else:
+            htf_expansion_direction = "Neutral"
+            htf_expansion_score = max(htf_long_expansion_score, htf_short_expansion_score)
 
         stats = ticker_stats.get(symbol, {})
         rows.append(
@@ -2752,6 +3219,18 @@ def build_metrics(
                 "z_fast": z_fast,
                 "z_slow": z_slow,
                 "z_htf": z_htf,
+                "htf_atr_value": htf_atr_value,
+                "htf_atr_percentile": htf_atr_percentile,
+                "htf_atr_compression_score": htf_atr_compression_score,
+                "htf_atr_roc": htf_atr_roc,
+                "htf_atr_expansion_score": htf_atr_expansion_score,
+                "htf_breakout_distance_atr": htf_breakout_distance_atr,
+                "htf_range_position": htf_range_position,
+                "htf_range_width_atr": htf_range_width_atr,
+                "htf_expansion_direction": htf_expansion_direction,
+                "htf_expansion_score": float(np.clip(htf_expansion_score, 0.0, 100.0)),
+                "htf_long_expansion_score": float(np.clip(htf_long_expansion_score, 0.0, 100.0)),
+                "htf_short_expansion_score": float(np.clip(htf_short_expansion_score, 0.0, 100.0)),
                 "ltf_alpha_raw": ltf_alpha_raw,
                 "htf_alpha_raw": htf_alpha_raw,
                 "vol_adjusted_raw": vol_adjusted_raw,
@@ -2791,25 +3270,117 @@ def build_metrics(
         out["funding_cumulative_z"], out["funding_trend_z"]
     )
     out["momentum_score"] = (
-        0.25 * out["alpha_score"]
-        + 0.15 * out["relative_strength_score"]
-        + 0.25 * out["volume_score"]
-        + 0.20 * out["trend_score"]
-        + 0.10 * out["oi_score"]
-        + 0.05 * out["funding_quality_score"]
+        MOMENTUM_SCORE_WEIGHTS["alpha"] * out["alpha_score"]
+        + MOMENTUM_SCORE_WEIGHTS["rs"] * out["relative_strength_score"]
+        + MOMENTUM_SCORE_WEIGHTS["volume"] * out["volume_score"]
+        + MOMENTUM_SCORE_WEIGHTS["trend"] * out["trend_score"]
+        + MOMENTUM_SCORE_WEIGHTS["oi"] * out["oi_score"]
+        + MOMENTUM_SCORE_WEIGHTS["funding"] * out["funding_quality_score"]
     )
     out["htf_momentum_score"] = (
-        0.30 * out["htf_alpha_score"]
-        + 0.20 * out["vol_adjusted_score"]
-        + 0.20 * out["htf_relative_strength_score"]
-        + 0.15 * out["htf_trend_score"]
-        + 0.10 * out["oi_score"]
-        + 0.05 * out["funding_trend_quality_score"]
+        HTF_MOMENTUM_SCORE_WEIGHTS["alpha"] * out["htf_alpha_score"]
+        + HTF_MOMENTUM_SCORE_WEIGHTS["vol_adjusted"] * out["vol_adjusted_score"]
+        + HTF_MOMENTUM_SCORE_WEIGHTS["rs"] * out["htf_relative_strength_score"]
+        + HTF_MOMENTUM_SCORE_WEIGHTS["trend"] * out["htf_trend_score"]
+        + HTF_MOMENTUM_SCORE_WEIGHTS["oi"] * out["oi_score"]
+        + HTF_MOMENTUM_SCORE_WEIGHTS["funding"] * out["funding_trend_quality_score"]
     )
     out["overextension_score"] = _percentile_score(out["overextension_raw"])
-    out["setup_score"] = (out["momentum_score"] - 0.45 * out["overextension_score"]).clip(lower=0.0)
-    out["htf_setup_score"] = (out["htf_momentum_score"] - 0.40 * out["overextension_score"]).clip(lower=0.0)
+    out["setup_score"] = (
+        out["momentum_score"] - SETUP_OVEREXTENSION_PENALTY * out["overextension_score"]
+    ).clip(lower=0.0)
+    out["htf_setup_score"] = (
+        out["htf_momentum_score"] - HTF_SETUP_OVEREXTENSION_PENALTY * out["overextension_score"]
+    ).clip(lower=0.0)
     return out.sort_values(["momentum_score", "setup_score"], ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
+def build_ltf_regime_metrics(
+    symbols: tuple[str, ...],
+    min_quote_volume: float,
+    min_trades: float,
+    min_oi_value: float,
+) -> pd.DataFrame:
+    ticker_stats = fetch_ticker_stats()
+    candidates = _candidate_symbols(symbols, ticker_stats, min_quote_volume, min_trades)
+    context_symbols = tuple(sorted(set(candidates + (ETH_SYMBOL,))))
+    contexts = fetch_ltf_symbol_contexts(context_symbols)
+    btc_context = contexts.get(BTC_SYMBOL)
+    eth_context = contexts.get(ETH_SYMBOL)
+    if not btc_context:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    btc_klines = btc_context.get("klines", {})
+    eth_klines = eth_context.get("klines", {}) if eth_context else {}
+
+    for symbol in candidates:
+        if symbol == BTC_SYMBOL:
+            continue
+        context = contexts.get(symbol)
+        if not context:
+            continue
+
+        klines = context.get("klines", {})
+        oi_hist = context.get("oi_hist", {})
+        if not isinstance(klines, dict) or not isinstance(oi_hist, dict):
+            continue
+
+        latest_oi_values = [
+            float(frame["oi_value"].iloc[-1])
+            for frame in oi_hist.values()
+            if isinstance(frame, pd.DataFrame) and not frame.empty
+        ]
+        oi_value = max(latest_oi_values) if latest_oi_values else 0.0
+        if oi_value < min_oi_value:
+            continue
+
+        for interval in LTF_INTERVALS:
+            df = klines.get(interval)
+            btc_df = btc_klines.get(interval) if isinstance(btc_klines, dict) else None
+            eth_df = eth_klines.get(interval) if isinstance(eth_klines, dict) else None
+            oi_df = oi_hist.get(interval, pd.DataFrame())
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            if not isinstance(btc_df, pd.DataFrame) or btc_df.empty:
+                continue
+            if not isinstance(oi_df, pd.DataFrame):
+                oi_df = pd.DataFrame()
+            row = _ltf_interval_metrics(symbol, interval, df, oi_df, btc_df, eth_df)
+            row["oi_value"] = oi_value
+            row["quote_volume_24h"] = float(ticker_stats.get(symbol, {}).get("quote_volume_24h", 0.0))
+            rows.append(row)
+
+    interval_df = pd.DataFrame(rows)
+    if interval_df.empty:
+        return interval_df
+
+    best_idx = interval_df.groupby("symbol")["ignition_score"].idxmax()
+    out = interval_df.loc[best_idx].copy()
+    out = out.rename(
+        columns={
+            "timeframe": "ignition_tf",
+            "ignition_score": "ltf_ignition_score",
+            "long_ignition_score": "ltf_long_ignition_score",
+            "short_ignition_score": "ltf_short_ignition_score",
+        }
+    )
+
+    for interval in LTF_INTERVALS:
+        tf_scores = interval_df[interval_df["timeframe"] == interval].set_index("symbol")["ignition_score"]
+        out[f"ignition_score_{interval}"] = out["symbol"].map(tf_scores).fillna(0.0)
+
+    out["ltf_direction"] = out["ignition_state"].map(
+        lambda value: "Long"
+        if str(value).startswith("Long")
+        else "Short"
+        if str(value).startswith("Short")
+        else "Compression"
+        if str(value) == "Compression"
+        else "Neutral"
+    )
+    return out.sort_values(["ltf_ignition_score", "volume_zscore", "oi_zscore"], ascending=False).reset_index(drop=True)
 
 
 def _scatter(df: pd.DataFrame, x: str, y: str, color: str, title: str, x_label: str, y_label: str):
@@ -2874,6 +3445,440 @@ def _scatter(df: pd.DataFrame, x: str, y: str, color: str, title: str, x_label: 
     return fig
 
 
+def _regime_scatter(df: pd.DataFrame, x: str, y: str, color: str, title: str, x_label: str, y_label: str):
+    fig = px.scatter(
+        df,
+        x=x,
+        y=y,
+        color=color,
+        hover_name="symbol",
+        hover_data={col: True for col in df.columns if col in {
+            "ignition_state",
+            "ignition_tf",
+            "ltf_ignition_score",
+            "htf_expansion_direction",
+            "htf_expansion_score",
+            "best_setup_score",
+            "atr_percentile",
+            "atr_roc",
+            "volume_zscore",
+            "oi_zscore",
+            "breakout_distance_atr",
+            "rs_vs_btc",
+            "rs_vs_eth",
+        }},
+        labels={x: x_label, y: y_label, color: color.replace("_", " ").title()},
+        title=title,
+        color_continuous_scale=[
+            [0.0, "#293528"],
+            [0.35, "#59705a"],
+            [0.7, "#9fab95"],
+            [1.0, "#e4eadf"],
+        ],
+        template="plotly_dark",
+        height=520,
+    )
+    fig.update_traces(marker=dict(size=8, opacity=0.86))
+    fig.update_layout(
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        title_font_size=17,
+        margin=dict(l=30, r=20, t=60, b=30),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _format_percent_columns(table_df: pd.DataFrame, percent_cols: list[str]) -> pd.DataFrame:
+    for col in percent_cols:
+        if col in table_df:
+            table_df[col] = table_df[col].map(lambda value: f"{float(value):+.2%}")
+    return table_df
+
+
+def _show_ltf_ignition_table(df: pd.DataFrame):
+    if df.empty:
+        st.info("No LTF ignition candidates match the current filters.")
+        return
+
+    cols = [
+        "symbol",
+        "ignition_state",
+        "ignition_tf",
+        "ltf_ignition_score",
+        "atr_percentile",
+        "atr_roc",
+        "atr_compression_score",
+        "atr_expansion_score",
+        "volume_zscore",
+        "oi_zscore",
+        "price_distance_from_vwap_atr",
+        "breakout_distance_atr",
+        "rs_vs_btc",
+        "rs_vs_eth",
+        "compression_recent_bars",
+        "ignition_score_5m",
+        "ignition_score_15m",
+        "ignition_score_1h",
+    ]
+    table_df = _format_percent_columns(df[cols].copy(), ["atr_roc", "rs_vs_btc", "rs_vs_eth"])
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        height=420,
+        hide_index=True,
+        column_config={
+            "symbol": st.column_config.TextColumn("Symbol"),
+            "ignition_state": st.column_config.TextColumn("State"),
+            "ignition_tf": st.column_config.TextColumn("TF"),
+            "ltf_ignition_score": st.column_config.NumberColumn("Ignition", format="%.1f"),
+            "atr_percentile": st.column_config.NumberColumn("ATR %ile", format="%.1f"),
+            "atr_roc": st.column_config.TextColumn("ATR ROC"),
+            "atr_compression_score": st.column_config.NumberColumn("Compression", format="%.1f"),
+            "atr_expansion_score": st.column_config.NumberColumn("Expansion", format="%.1f"),
+            "volume_zscore": st.column_config.NumberColumn("Vol Z", format="%.2f"),
+            "oi_zscore": st.column_config.NumberColumn("OI Z", format="%.2f"),
+            "price_distance_from_vwap_atr": st.column_config.NumberColumn("VWAP Dist ATR", format="%.2f"),
+            "breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
+            "rs_vs_btc": st.column_config.TextColumn("RS BTC"),
+            "rs_vs_eth": st.column_config.TextColumn("RS ETH"),
+            "compression_recent_bars": st.column_config.NumberColumn("Comp Bars", format="%d"),
+            "ignition_score_5m": st.column_config.NumberColumn("5m", format="%.1f"),
+            "ignition_score_15m": st.column_config.NumberColumn("15m", format="%.1f"),
+            "ignition_score_1h": st.column_config.NumberColumn("1h", format="%.1f"),
+        },
+    )
+
+
+def _show_htf_expansion_table(df: pd.DataFrame):
+    if df.empty:
+        st.info("No HTF expansion candidates match the current filters.")
+        return
+
+    cols = [
+        "symbol",
+        "htf_expansion_direction",
+        "htf_expansion_score",
+        "htf_atr_percentile",
+        "htf_atr_roc",
+        "htf_atr_compression_score",
+        "htf_atr_expansion_score",
+        "htf_breakout_distance_atr",
+        "htf_range_width_atr",
+        "htf_momentum_score",
+        "htf_setup_score",
+        "htf_relative_strength_score",
+        "volume_score",
+        "oi_score",
+        "rs_24h",
+        "rs_72h",
+    ]
+    table_df = _format_percent_columns(df[cols].copy(), ["htf_atr_roc", "rs_24h", "rs_72h"])
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        height=420,
+        hide_index=True,
+        column_config={
+            "symbol": st.column_config.TextColumn("Symbol"),
+            "htf_expansion_direction": st.column_config.TextColumn("State"),
+            "htf_expansion_score": st.column_config.NumberColumn("Expansion", format="%.1f"),
+            "htf_atr_percentile": st.column_config.NumberColumn("ATR %ile", format="%.1f"),
+            "htf_atr_roc": st.column_config.TextColumn("ATR ROC"),
+            "htf_atr_compression_score": st.column_config.NumberColumn("Compression", format="%.1f"),
+            "htf_atr_expansion_score": st.column_config.NumberColumn("ATR Expand", format="%.1f"),
+            "htf_breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
+            "htf_range_width_atr": st.column_config.NumberColumn("Range ATR", format="%.2f"),
+            "htf_momentum_score": st.column_config.NumberColumn("HTF Momentum", format="%.1f"),
+            "htf_setup_score": st.column_config.NumberColumn("HTF Setup", format="%.1f"),
+            "htf_relative_strength_score": st.column_config.NumberColumn("HTF RS", format="%.1f"),
+            "volume_score": st.column_config.NumberColumn("Vol Score", format="%.1f"),
+            "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f"),
+            "rs_24h": st.column_config.TextColumn("RS 24H"),
+            "rs_72h": st.column_config.TextColumn("RS 72H"),
+        },
+    )
+
+
+def _build_best_setups(ltf_df: pd.DataFrame, htf_df: pd.DataFrame) -> pd.DataFrame:
+    if ltf_df.empty or htf_df.empty:
+        return pd.DataFrame()
+
+    htf_cols = [
+        "symbol",
+        "htf_expansion_direction",
+        "htf_expansion_score",
+        "htf_momentum_score",
+        "htf_setup_score",
+        "htf_atr_percentile",
+        "htf_atr_roc",
+        "htf_breakout_distance_atr",
+        "rs_24h",
+        "rs_72h",
+    ]
+    merged = ltf_df.merge(htf_df[htf_cols], on="symbol", how="inner")
+    if merged.empty:
+        return merged
+
+    long_aligned = (merged["ltf_direction"] == "Long") & merged["htf_expansion_direction"].str.startswith("Long")
+    short_aligned = (merged["ltf_direction"] == "Short") & merged["htf_expansion_direction"].str.startswith("Short")
+    compression_context = merged["htf_expansion_direction"].eq("Compression")
+    merged["alignment_score"] = np.select(
+        [long_aligned | short_aligned, compression_context],
+        [100.0, 70.0],
+        default=35.0,
+    )
+    merged["best_setup_score"] = (
+        0.55 * merged["ltf_ignition_score"]
+        + 0.30 * merged["htf_expansion_score"]
+        + 0.15 * merged["alignment_score"]
+    ).clip(0.0, 100.0)
+    merged["best_setup_state"] = np.select(
+        [long_aligned, short_aligned, compression_context],
+        ["Long best setup", "Short best setup", "LTF trigger in HTF compression"],
+        default="Mixed setup",
+    )
+    return merged.sort_values("best_setup_score", ascending=False).reset_index(drop=True)
+
+
+def _show_best_setups_table(df: pd.DataFrame):
+    if df.empty:
+        st.info("No combined best setups match the current filters.")
+        return
+
+    cols = [
+        "symbol",
+        "best_setup_state",
+        "best_setup_score",
+        "ignition_state",
+        "ignition_tf",
+        "ltf_ignition_score",
+        "htf_expansion_direction",
+        "htf_expansion_score",
+        "alignment_score",
+        "volume_zscore",
+        "oi_zscore",
+        "atr_percentile",
+        "atr_roc",
+        "breakout_distance_atr",
+        "rs_vs_btc",
+        "rs_vs_eth",
+    ]
+    table_df = _format_percent_columns(df[cols].copy(), ["atr_roc", "rs_vs_btc", "rs_vs_eth"])
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        height=460,
+        hide_index=True,
+        column_config={
+            "symbol": st.column_config.TextColumn("Symbol"),
+            "best_setup_state": st.column_config.TextColumn("Best Setup"),
+            "best_setup_score": st.column_config.NumberColumn("Score", format="%.1f"),
+            "ignition_state": st.column_config.TextColumn("LTF State"),
+            "ignition_tf": st.column_config.TextColumn("TF"),
+            "ltf_ignition_score": st.column_config.NumberColumn("LTF Ignition", format="%.1f"),
+            "htf_expansion_direction": st.column_config.TextColumn("HTF State"),
+            "htf_expansion_score": st.column_config.NumberColumn("HTF Expansion", format="%.1f"),
+            "alignment_score": st.column_config.NumberColumn("Align", format="%.1f"),
+            "volume_zscore": st.column_config.NumberColumn("Vol Z", format="%.2f"),
+            "oi_zscore": st.column_config.NumberColumn("OI Z", format="%.2f"),
+            "atr_percentile": st.column_config.NumberColumn("ATR %ile", format="%.1f"),
+            "atr_roc": st.column_config.TextColumn("ATR ROC"),
+            "breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
+            "rs_vs_btc": st.column_config.TextColumn("RS BTC"),
+            "rs_vs_eth": st.column_config.TextColumn("RS ETH"),
+        },
+    )
+
+
+def _render_classic_altcoin_dashboard(
+    df: pd.DataFrame,
+    scoring_mode: str,
+    min_score: int,
+    max_overextension_score: int,
+    top_n: int,
+    view: str,
+):
+    is_htf = scoring_mode == "HTF Momentum"
+    if is_htf:
+        momentum_col = "htf_momentum_score"
+        setup_col = "htf_setup_score"
+        score_label = "HTF Momentum"
+        sort_cols = ["htf_setup_score", "htf_momentum_score"]
+    else:
+        momentum_col = "momentum_score"
+        setup_col = "setup_score"
+        score_label = "LTF Scalping"
+        sort_cols = ["setup_score", "momentum_score"]
+
+    setups = df[
+        (df[momentum_col] >= float(min_score))
+        & (df["overextension_score"] <= float(max_overextension_score))
+    ].sort_values(sort_cols, ascending=False)
+    ranked_df = df.sort_values([momentum_col, setup_col], ascending=False)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Alts Scanned", f"{len(df):,}")
+    c2.metric("Qualified Setups", f"{len(setups):,}")
+    c3.metric(f"Top {score_label}", f"{df[momentum_col].max():.1f}")
+    c4.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
+
+    if view == "Momentum vs Overextension":
+        fig = _scatter(
+            ranked_df,
+            momentum_col,
+            "overextension_score",
+            "alpha_score" if not is_htf else "htf_alpha_score",
+            f"{score_label} vs Overextension",
+            f"{score_label} Score",
+            "Overextension Score",
+        )
+    elif view == "RS 4H vs RS 24H":
+        fig = _scatter(
+            ranked_df,
+            "rs_4h",
+            "rs_24h",
+            momentum_col,
+            "Relative Strength vs BTC",
+            "RS vs BTC (4H)",
+            "RS vs BTC (24H)",
+        )
+    else:
+        fig = _scatter(
+            ranked_df,
+            "volume_ratio_1h",
+            "oi_change_1h",
+            momentum_col,
+            "Volume Expansion vs Open Interest Expansion",
+            "1H Volume Ratio",
+            "1H OI Change",
+        )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    heading_col, glossary_col = st.columns([0.76, 0.24], vertical_alignment="bottom")
+    with heading_col:
+        st.subheader(f"Classic {score_label.lower()} dashboard ({len(setups)} assets)")
+    with glossary_col:
+        _render_glossary_jump()
+    _show_table(setups.head(top_n), scoring_mode)
+
+    with st.expander(f"Full classic screener ({len(df)} assets)"):
+        _show_table(ranked_df, scoring_mode)
+
+
+def _render_ltf_scalping_dashboard(
+    df: pd.DataFrame,
+    ltf_df: pd.DataFrame,
+    min_score: int,
+    max_overextension_score: int,
+    top_n: int,
+    view: str,
+):
+    st.subheader("LTF Ignition")
+    st.caption("Native 5m, 15m, and 1h ATR regime scan across all liquidity-qualified alts.")
+    if ltf_df.empty:
+        ignition_df = ltf_df
+    else:
+        ignition_df = ltf_df[ltf_df["ltf_ignition_score"] >= float(min_score)].sort_values(
+            ["ltf_ignition_score", "volume_zscore", "oi_zscore"],
+            ascending=False,
+        )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("LTF Assets Scanned", f"{len(ltf_df):,}")
+    c2.metric("Ignition Candidates", f"{len(ignition_df):,}")
+    c3.metric("Top Ignition", f"{ltf_df['ltf_ignition_score'].max():.1f}" if not ltf_df.empty else "0.0")
+    c4.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
+
+    if not ignition_df.empty:
+        fig = _regime_scatter(
+            ignition_df,
+            "volume_zscore",
+            "oi_zscore",
+            "ltf_ignition_score",
+            "LTF Ignition: Volume Spike vs OI Spike",
+            "Volume Z-Score",
+            "OI Z-Score",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    _show_ltf_ignition_table(ignition_df.head(top_n))
+
+    st.divider()
+    _render_classic_altcoin_dashboard(df, "LTF Scalping", min_score, max_overextension_score, top_n, view)
+
+
+def _render_htf_momentum_dashboard(
+    df: pd.DataFrame,
+    min_score: int,
+    max_overextension_score: int,
+    top_n: int,
+    view: str,
+):
+    st.subheader("HTF Expansion")
+    st.caption("Lighter HTF context derived from the existing 1h history, with ATR compression/expansion and structure checks.")
+    expansion_df = df[df["htf_expansion_score"] >= float(min_score)].sort_values(
+        ["htf_expansion_score", "htf_momentum_score"],
+        ascending=False,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("HTF Assets Scanned", f"{len(df):,}")
+    c2.metric("Expansion Candidates", f"{len(expansion_df):,}")
+    c3.metric("Top Expansion", f"{df['htf_expansion_score'].max():.1f}")
+    c4.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
+
+    if not expansion_df.empty:
+        fig = _regime_scatter(
+            expansion_df,
+            "htf_atr_percentile",
+            "htf_atr_roc",
+            "htf_expansion_score",
+            "HTF Expansion: ATR Percentile vs ATR ROC",
+            "ATR Percentile",
+            "ATR ROC",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    _show_htf_expansion_table(expansion_df.head(top_n))
+
+    st.divider()
+    _render_classic_altcoin_dashboard(df, "HTF Momentum", min_score, max_overextension_score, top_n, view)
+
+
+def _render_best_setups_dashboard(
+    df: pd.DataFrame,
+    ltf_df: pd.DataFrame,
+    min_score: int,
+    top_n: int,
+):
+    st.subheader("Best Setups")
+    st.caption("Combined view: accurate LTF ignition first, then HTF expansion/compression context for alignment.")
+    best_df = _build_best_setups(ltf_df, df)
+    if not best_df.empty:
+        best_df = best_df[best_df["best_setup_score"] >= float(min_score)].sort_values("best_setup_score", ascending=False)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Combined Assets", f"{len(best_df):,}")
+    c2.metric("Long Setups", f"{best_df['best_setup_state'].str.startswith('Long').sum() if not best_df.empty else 0:,}")
+    c3.metric("Short Setups", f"{best_df['best_setup_state'].str.startswith('Short').sum() if not best_df.empty else 0:,}")
+    c4.metric("Top Best Setup", f"{best_df['best_setup_score'].max():.1f}" if not best_df.empty else "0.0")
+
+    if not best_df.empty:
+        fig = _regime_scatter(
+            best_df,
+            "ltf_ignition_score",
+            "htf_expansion_score",
+            "best_setup_score",
+            "Best Setups: LTF Ignition vs HTF Expansion",
+            "LTF Ignition Score",
+            "HTF Expansion Score",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    _show_best_setups_table(best_df.head(top_n))
+
+
 def _show_table(df: pd.DataFrame, scoring_mode: str):
     cols = [
         "symbol"
@@ -2882,7 +3887,7 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
         st.info("No assets match the current filters.")
         return
 
-    if scoring_mode == "HTF Leadership":
+    if scoring_mode in {"HTF Leadership", "HTF Momentum"}:
         cols = [
             "symbol",
             "htf_setup_score",
@@ -2945,8 +3950,8 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
         table_df["overall_htf_strength"] = table_df["htf_momentum_score"]
         column_config = {
             "symbol": st.column_config.TextColumn("Symbol", help=_term_help("Symbol")),
-            "setup_score": st.column_config.NumberColumn("Setup", format="%.1f", help=_term_help("Setup")),
-            "momentum_score": st.column_config.NumberColumn("Momentum", format="%.1f", help=_term_help("Momentum")),
+            "setup_score": st.column_config.NumberColumn("Scalp Setup", format="%.1f", help=_term_help("Setup")),
+            "momentum_score": st.column_config.NumberColumn("LTF Scalping", format="%.1f", help=_term_help("Momentum")),
             "volume_score": st.column_config.NumberColumn("Vol Score", format="%.1f", help=_term_help("Vol Score")),
             "trend_score": st.column_config.NumberColumn("Trend Score", format="%.1f", help=_term_help("Trend Score")),
             "volume_ratio_1h": st.column_config.NumberColumn("Vol Ratio", format="%.2f", help=_term_help("Vol Ratio")),
@@ -3073,6 +4078,12 @@ def main():
     bitcoin_mode = "Bitcoin Spot Vol (Binance)"
     bubble_timeframe = "1D"
     bubble_lookback_days = 365
+    altcoin_views = ["LTF Scalping", "HTF Momentum", "Best Setups"]
+    if "altcoin_screener_mode" not in st.session_state:
+        st.session_state["altcoin_screener_mode"] = "LTF Scalping"
+
+    def _open_altcoin_screener():
+        st.session_state["app_page"] = "Altcoins"
 
     with st.sidebar:
         if st.button("Force refresh"):
@@ -3086,9 +4097,16 @@ def main():
         st.divider()
 
         with st.expander("Altcoins", expanded=page == "Altcoins"):
-            if st.button("Altcoin Screener", key="page_altcoins", use_container_width=True):
-                st.session_state["app_page"] = "Altcoins"
-                st.rerun()
+            altcoin_screener_mode = st.radio(
+                "Altcoin Screener",
+                altcoin_views,
+                index=altcoin_views.index(st.session_state["altcoin_screener_mode"])
+                if st.session_state["altcoin_screener_mode"] in altcoin_views
+                else 0,
+                key="altcoin_screener_mode",
+                on_change=_open_altcoin_screener,
+                label_visibility="collapsed",
+            )
 
         with st.expander("Bitcoin", expanded=page in {"BITCOIN", "BTC Options Screener"}):
             if st.button("Bitcoin Spot Volume Bubblemap", key="page_bitcoin_bubble", use_container_width=True):
@@ -3151,14 +4169,8 @@ def main():
             st.caption("Balanced defaults: 10M quote volume, 15k trades, 5M open interest.")
 
             st.divider()
-            st.subheader("Setup filters")
-            scoring_mode = st.radio(
-                "Scoring mode",
-                ["LTF Momentum", "HTF Leadership"],
-                index=0,
-                help="LTF favors 1H/4H/24H ignition. HTF favors 24H/72H/7D leadership and cleaner trends.",
-            )
-            min_momentum_score = st.slider("Min momentum score", 0, 100, 70, 1)
+            st.subheader("Dashboard filters")
+            min_dashboard_score = st.slider("Min dashboard score", 0, 100, 70, 1)
             max_overextension_score = st.slider("Max overextension score", 0, 100, 65, 1)
             top_n = st.slider("Rows to show", 10, 100, 30, 5)
 
@@ -3210,81 +4222,44 @@ def main():
             st.stop()
 
     progress_msg = st.empty()
-    progress_msg.info("Building 1H momentum model for Binance altcoin perps - first load can take ~20 sec...")
+    progress_msg.info("Building core 1H momentum model for Binance altcoin perps...")
     df = build_metrics(symbols, min_quote_volume, min_trades, min_oi_value)
-    progress_msg.empty()
 
     if df.empty:
+        progress_msg.empty()
         st.error("No altcoins matched the current gates. Lower the liquidity thresholds and try again.")
         st.stop()
 
-    if scoring_mode == "HTF Leadership":
-        momentum_col = "htf_momentum_score"
-        setup_col = "htf_setup_score"
-        score_label = "HTF Momentum"
-        sort_cols = ["htf_setup_score", "htf_momentum_score"]
-    else:
-        momentum_col = "momentum_score"
-        setup_col = "setup_score"
-        score_label = "LTF Momentum"
-        sort_cols = ["setup_score", "momentum_score"]
+    ltf_df = pd.DataFrame()
+    if altcoin_screener_mode in {"LTF Scalping", "Best Setups"}:
+        progress_msg.info("Building accurate native LTF ATR ignition model - this fetches 5m, 15m, and 1h data...")
+        ltf_df = build_ltf_regime_metrics(symbols, min_quote_volume, min_trades, min_oi_value)
+    progress_msg.empty()
 
-    setups = df[
-        (df[momentum_col] >= float(min_momentum_score))
-        & (df["overextension_score"] <= float(max_overextension_score))
-    ].sort_values(sort_cols, ascending=False)
-    ranked_df = df.sort_values([momentum_col, setup_col], ascending=False)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Alts Scanned", f"{len(df):,}")
-    c2.metric("Qualified Setups", f"{len(setups):,}")
-    c3.metric(f"Top {score_label}", f"{df[momentum_col].max():.1f}")
-    c4.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
-
-    st.divider()
-
-    if view == "Momentum vs Overextension":
-        fig = _scatter(
-            ranked_df,
-            momentum_col,
-            "overextension_score",
-            "alpha_score" if scoring_mode == "LTF Momentum" else "htf_alpha_score",
-            f"{score_label} vs Overextension",
-            f"{score_label} Score",
-            "Overextension Score",
+    if altcoin_screener_mode == "LTF Scalping":
+        _render_ltf_scalping_dashboard(
+            df,
+            ltf_df,
+            min_dashboard_score,
+            max_overextension_score,
+            top_n,
+            view,
         )
-    elif view == "RS 4H vs RS 24H":
-        fig = _scatter(
-            ranked_df,
-            "rs_4h",
-            "rs_24h",
-            momentum_col,
-            "Relative Strength vs BTC",
-            "RS vs BTC (4H)",
-            "RS vs BTC (24H)",
+    elif altcoin_screener_mode == "HTF Momentum":
+        _render_htf_momentum_dashboard(
+            df,
+            min_dashboard_score,
+            max_overextension_score,
+            top_n,
+            view,
         )
     else:
-        fig = _scatter(
-            ranked_df,
-            "volume_ratio_1h",
-            "oi_change_1h",
-            momentum_col,
-            "Volume Expansion vs Open Interest Expansion",
-            "1H Volume Ratio",
-            "1H OI Change",
+        _render_best_setups_dashboard(
+            df,
+            ltf_df,
+            min_dashboard_score,
+            top_n,
         )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    heading_col, glossary_col = st.columns([0.76, 0.24], vertical_alignment="bottom")
-    with heading_col:
-        st.subheader(f"Top {score_label.lower()} setups ({len(setups)} assets)")
-    with glossary_col:
-        _render_glossary_jump()
-    _show_table(setups.head(top_n), scoring_mode)
-
-    with st.expander(f"Full screener ({len(df)} assets)"):
-        _show_table(ranked_df, scoring_mode)
 
 
 if __name__ == "__main__":
