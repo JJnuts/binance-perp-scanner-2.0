@@ -61,6 +61,55 @@ class ScoringHelperTests(unittest.TestCase):
         self.assertGreater(beta, 1.0)
         self.assertAlmostEqual(alpha, scanner._beta_adjusted_alpha(asset, btc, 4, beta_lookback=30))
 
+    def test_bars_since_latest_true_reports_age(self):
+        series = pd.Series([False, True, False, True, False])
+
+        self.assertEqual(scanner._bars_since_latest_true(series), 1)
+        self.assertEqual(scanner._bars_since_latest_true(pd.Series([False, False])), 999)
+
+    def test_basis_context_uses_spot_alignment(self):
+        idx = pd.date_range("2026-01-01", periods=4, freq="5min")
+        perp = pd.DataFrame({"close": [100.0, 101.0, 103.0, 105.0]}, index=idx)
+        spot = pd.DataFrame({"close": [100.0, 100.5, 101.0, 102.0]}, index=idx)
+
+        basis_bp, basis_delta, available = scanner._basis_context(perp, spot)
+
+        self.assertTrue(available)
+        self.assertGreater(basis_bp, 0.0)
+        self.assertGreater(basis_delta, 0.0)
+
+    def test_ltf_interval_metrics_emits_precision_fields(self):
+        idx = pd.date_range("2026-01-01", periods=80, freq="5min")
+        close = pd.Series([100.0 + i * 0.1 for i in range(80)], index=idx)
+        df = pd.DataFrame(
+            {
+                "open": close - 0.05,
+                "high": close + 0.20,
+                "low": close - 0.20,
+                "close": close,
+                "vol": [100.0 + i for i in range(80)],
+                "quote_vol": [10000.0 + i * 100.0 for i in range(80)],
+                "trades": [100 + i for i in range(80)],
+                "tb_quote": [5200.0 + i * 55.0 for i in range(80)],
+            },
+            index=idx,
+        )
+        spot = df.copy()
+        spot["close"] = spot["close"] * 0.999
+
+        row = scanner._ltf_interval_metrics("TESTUSDT", "5m", df, pd.DataFrame(), df, df, spot)
+
+        for field in [
+            "bars_since_trigger",
+            "trigger_fresh",
+            "taker_imbalance",
+            "cvd_3bar_slope",
+            "basis_bp",
+            "basis_delta_3bar_bp",
+            "break_hold_confirmed",
+        ]:
+            self.assertIn(field, row)
+
 
 if __name__ == "__main__":
     unittest.main()

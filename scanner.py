@@ -26,6 +26,7 @@ warnings.filterwarnings("ignore")
 
 
 BINANCE_BASE = "https://fapi.binance.com"
+BINANCE_SPOT_BASE = "https://api.binance.com"
 DERIBIT_BASE = "https://www.deribit.com/api/v2"
 YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 INTERVAL = "1h"
@@ -34,7 +35,7 @@ ETH_SYMBOL = "ETHUSDT"
 LTF_INTERVALS = ("5m", "15m", "1h")
 LTF_KLINE_LIMITS = {"5m": 240, "15m": 240, "1h": 240}
 LTF_OI_LIMIT = 120
-LTF_CACHE_TTL = 120
+LTF_CACHE_TTL = 45
 ATR_PERIOD = 14
 ATR_PERCENTILE_LOOKBACK = 120
 ATR_ROC_LOOKBACK = 3
@@ -44,6 +45,11 @@ RS_LOOKBACK_BARS = {"5m": 12, "15m": 8, "1h": 4}
 ATR_ROC_THRESHOLD = 0.08
 VOLUME_Z_THRESHOLD = 2.0
 OI_Z_THRESHOLD = 2.0
+FRESH_TRIGGER_BARS = {"5m": 2, "15m": 2, "1h": 1}
+MAX_BEST_SETUP_TRIGGER_BARS = 3
+MIN_TF_ALIGNMENT = 2
+TAKER_IMBALANCE_THRESHOLD = 0.08
+BASIS_CONFIRM_BP = 0.0
 LTF_ALPHA_WEIGHTS = {"1h": 0.20, "4h": 0.45, "24h": 0.35}
 HTF_ALPHA_WEIGHTS = {"24h": 0.50, "72h": 0.30, "168h": 0.20}
 VOL_ADJUSTED_WEIGHTS = {"24h": 0.35, "72h": 0.35, "168h": 0.30}
@@ -75,7 +81,7 @@ OI_LOOKBACK = 3
 OI_PERIOD = "1h"
 FUNDING_LIMIT = 30
 MAX_WORKERS = 20
-REFRESH_MS = 5 * 60 * 1000
+REFRESH_MS = 60 * 1000
 CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
@@ -1016,6 +1022,59 @@ def _fetch_klines(symbol: str) -> Optional[pd.DataFrame]:
     return _fetch_klines_interval(symbol, INTERVAL, CANDLE_LIMIT)
 
 
+def _fetch_spot_klines_interval(symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    raw = _get_json_url(f"{BINANCE_SPOT_BASE}/api/v3/klines", params=params, timeout=12)
+    if not isinstance(raw, list) or len(raw) < EMA_SLOW + 5:
+        return None
+
+    df = pd.DataFrame(
+        raw,
+        columns=[
+            "open_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "vol",
+            "close_time",
+            "quote_vol",
+            "trades",
+            "tb_base",
+            "tb_quote",
+            "ignore",
+        ],
+    )
+    df["ts"] = pd.to_datetime(df["open_time"], unit="ms")
+    for col in ("open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"):
+        df[col] = df[col].astype(float)
+    return df.set_index("ts")[["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"]]
+
+
+def _fetch_ltf_spot_symbol_context(symbol: str) -> tuple[str, dict[str, pd.DataFrame]]:
+    klines: dict[str, pd.DataFrame] = {}
+    for interval in LTF_INTERVALS:
+        try:
+            df = _fetch_spot_klines_interval(symbol, interval, LTF_KLINE_LIMITS[interval])
+            if df is not None and not df.empty:
+                klines[interval] = df
+        except Exception:
+            continue
+    return symbol, klines
+
+
+@st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
+def fetch_ltf_spot_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_ltf_spot_symbol_context, symbol): symbol for symbol in symbols}
+        for fut in as_completed(futures):
+            symbol, klines = fut.result()
+            if klines:
+                out[symbol] = {"klines": klines}
+    return out
+
+
 def _fetch_open_interest_hist_frame(symbol: str, period: str, limit: int) -> pd.DataFrame:
     params = {"symbol": symbol, "period": period, "limit": limit}
     raw = _get_json("/futures/data/openInterestHist", params=params, timeout=12)
@@ -1282,6 +1341,51 @@ def _oi_zscore(oi_df: pd.DataFrame, lookback: int = VOLUME_LOOKBACK) -> tuple[fl
     return float(z_series.iloc[-1]), z_series
 
 
+def _rolling_vwap_series(df: pd.DataFrame, n: int) -> pd.Series:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv_sum = (tp * df["vol"]).rolling(n, min_periods=2).sum()
+    vol_sum = df["vol"].rolling(n, min_periods=2).sum()
+    return (pv_sum / vol_sum.replace(0.0, np.nan)).fillna(df["close"])
+
+
+def _bars_since_latest_true(series: pd.Series) -> int:
+    truthy = series.fillna(False).astype(bool)
+    if truthy.empty or not bool(truthy.any()):
+        return 999
+    positions = np.flatnonzero(truthy.to_numpy())
+    return int(len(truthy) - 1 - positions[-1])
+
+
+def _latest_trigger_transition(raw_trigger: pd.Series) -> pd.Series:
+    trigger = raw_trigger.fillna(False).astype(bool)
+    return trigger & ~trigger.shift(1, fill_value=False)
+
+
+def _direction_from_state(value: object) -> str:
+    text = str(value)
+    if text.startswith("Long"):
+        return "Long"
+    if text.startswith("Short"):
+        return "Short"
+    if text == "Compression":
+        return "Compression"
+    return "Neutral"
+
+
+def _basis_context(perp_df: pd.DataFrame, spot_df: Optional[pd.DataFrame]) -> tuple[float, float, bool]:
+    if spot_df is None or spot_df.empty:
+        return 0.0, 0.0, False
+    spot_close = spot_df["close"].reindex(perp_df.index, method="ffill")
+    basis = ((perp_df["close"] - spot_close) / spot_close.replace(0.0, np.nan) * 10000.0).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    if basis.dropna().empty:
+        return 0.0, 0.0, False
+    basis = basis.ffill().fillna(0.0)
+    return float(basis.iloc[-1]), float(basis.diff(3).fillna(0.0).iloc[-1]), True
+
+
 def _ltf_interval_metrics(
     symbol: str,
     interval: str,
@@ -1289,34 +1393,43 @@ def _ltf_interval_metrics(
     oi_df: pd.DataFrame,
     btc_df: pd.DataFrame,
     eth_df: Optional[pd.DataFrame],
+    spot_df: Optional[pd.DataFrame],
 ) -> dict[str, object]:
     atr = _atr_series(df)
     atr_value = float(atr.iloc[-1]) if not atr.empty and pd.notna(atr.iloc[-1]) else 0.0
     atr_percentile_series = _rolling_percentile(atr)
     atr_percentile = float(atr_percentile_series.iloc[-1]) if not atr_percentile_series.empty else 50.0
-    if len(atr) > ATR_ROC_LOOKBACK and float(atr.iloc[-1 - ATR_ROC_LOOKBACK]) > 1e-12:
-        atr_roc = float(atr.iloc[-1] / atr.iloc[-1 - ATR_ROC_LOOKBACK] - 1.0)
-    else:
-        atr_roc = 0.0
+    atr_roc_series = (atr / atr.shift(ATR_ROC_LOOKBACK) - 1.0).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    atr_roc = float(atr_roc_series.iloc[-1]) if not atr_roc_series.empty else 0.0
 
     volume_z_series = _rolling_zscore(df["quote_vol"], VOLUME_LOOKBACK)
     volume_zscore = float(volume_z_series.iloc[-1]) if not volume_z_series.empty else 0.0
     oi_zscore, oi_z_series = _oi_zscore(oi_df, VOLUME_LOOKBACK)
+    if oi_z_series.empty:
+        oi_z_aligned = pd.Series(0.0, index=df.index)
+    else:
+        oi_z_aligned = oi_z_series.reindex(df.index, method="ffill").fillna(0.0)
     price = float(df["close"].iloc[-1])
-    vwap = _vwap(df, min(VWAP_SLOW, len(df)))
+    vwap_series = _rolling_vwap_series(df, min(VWAP_SLOW, len(df)))
+    vwap = float(vwap_series.iloc[-1])
     price_distance_from_vwap_atr = (price - vwap) / max(atr_value, 1e-12)
 
-    range_high, range_low, range_position, range_width_atr = _range_context(
-        df,
-        RANGE_LOOKBACK_BARS.get(interval, 24),
-        atr_value,
+    range_lookback = RANGE_LOOKBACK_BARS.get(interval, 24)
+    range_high, range_low, range_position, range_width_atr = _range_context(df, range_lookback, atr_value)
+    prior_high = df["high"].shift(1).rolling(range_lookback).max()
+    prior_low = df["low"].shift(1).rolling(range_lookback).min()
+    breakout_distance_series = pd.Series(0.0, index=df.index)
+    atr_denom = atr.replace(0.0, np.nan).ffill().fillna(0.0).clip(lower=1e-12)
+    breakout_distance_series = np.where(
+        df["close"] > prior_high,
+        (df["close"] - prior_high) / atr_denom,
+        np.where(df["close"] < prior_low, (df["close"] - prior_low) / atr_denom, 0.0),
     )
-    if price > range_high and range_high > 0:
-        breakout_distance_atr = (price - range_high) / max(atr_value, 1e-12)
-    elif price < range_low and range_low > 0:
-        breakout_distance_atr = (price - range_low) / max(atr_value, 1e-12)
-    else:
-        breakout_distance_atr = 0.0
+    breakout_distance_series = pd.Series(breakout_distance_series, index=df.index).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    breakout_distance_atr = float(breakout_distance_series.iloc[-1]) if not breakout_distance_series.empty else 0.0
+    break_hold_long_series = (df["close"] > prior_high) & (df["close"].shift(1) > prior_high.shift(1))
+    break_hold_short_series = (df["close"] < prior_low) & (df["close"].shift(1) < prior_low.shift(1))
+    break_hold_confirmed = bool(break_hold_long_series.iloc[-1] or break_hold_short_series.iloc[-1])
 
     lookback = RS_LOOKBACK_BARS.get(interval, 4)
     ret = _return_n(df["close"], lookback)
@@ -1325,17 +1438,10 @@ def _ltf_interval_metrics(
     rs_vs_btc = ret - btc_ret
     rs_vs_eth = ret - eth_ret
 
-    compression_recent_bars = 0
-    if not atr_percentile_series.empty and not volume_z_series.empty:
-        recent_len = COMPRESSION_RECENT_BARS.get(interval, 12)
-        atr_recent = atr_percentile_series.tail(recent_len)
-        volume_recent = volume_z_series.tail(recent_len)
-        if oi_z_series.empty:
-            oi_recent = pd.Series(0.0, index=atr_recent.index)
-        else:
-            oi_recent = oi_z_series.reindex(atr_recent.index, method="nearest").fillna(0.0)
-        compression_series = (atr_recent < 20.0) & (volume_recent < 0.5) & (oi_recent.abs() < 0.5)
-        compression_recent_bars = int(compression_series.sum())
+    recent_len = COMPRESSION_RECENT_BARS.get(interval, 12)
+    compression_series = (atr_percentile_series < 20.0) & (volume_z_series < 0.5) & (oi_z_aligned.abs() < 0.5)
+    compression_count_series = compression_series.astype(float).rolling(recent_len, min_periods=1).sum()
+    compression_recent_bars = int(compression_count_series.iloc[-1]) if not compression_count_series.empty else 0
 
     atr_compression_score = _compression_score(atr_percentile, volume_zscore, oi_zscore)
     atr_expansion_score = _score_from_threshold(max(atr_roc, 0.0), ATR_ROC_THRESHOLD, 70.0)
@@ -1345,23 +1451,68 @@ def _ltf_interval_metrics(
     rs_long_score = float(np.clip((rs_vs_btc * 800.0) + (rs_vs_eth * 500.0), 0.0, 100.0))
     rs_short_score = float(np.clip((-rs_vs_btc * 800.0) + (-rs_vs_eth * 500.0), 0.0, 100.0))
 
-    expansion_ready = atr_roc > ATR_ROC_THRESHOLD and compression_recent_bars > 0
-    long_trigger = (
-        expansion_ready
-        and volume_zscore > VOLUME_Z_THRESHOLD
-        and oi_zscore > OI_Z_THRESHOLD
-        and price > vwap
-        and breakout_distance_atr > 0.0
-        and rs_vs_btc > 0.0
+    taker_delta = ((2.0 * df["tb_quote"]) - df["quote_vol"]).fillna(0.0)
+    taker_imbalance_series = (taker_delta / df["quote_vol"].replace(0.0, np.nan)).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    taker_imbalance = float(taker_imbalance_series.iloc[-1]) if not taker_imbalance_series.empty else 0.0
+    cvd = taker_delta.cumsum()
+    cvd_3bar_slope_series = cvd.diff(3).fillna(0.0)
+    cvd_3bar_slope = float(cvd_3bar_slope_series.iloc[-1]) if not cvd_3bar_slope_series.empty else 0.0
+    taker_long_confirmed = taker_imbalance > TAKER_IMBALANCE_THRESHOLD and cvd_3bar_slope > 0.0
+    taker_short_confirmed = taker_imbalance < -TAKER_IMBALANCE_THRESHOLD and cvd_3bar_slope < 0.0
+    taker_long_series = (taker_imbalance_series > TAKER_IMBALANCE_THRESHOLD) & (cvd_3bar_slope_series > 0.0)
+    taker_short_series = (taker_imbalance_series < -TAKER_IMBALANCE_THRESHOLD) & (cvd_3bar_slope_series < 0.0)
+
+    basis_bp, basis_delta_3bar_bp, basis_available = _basis_context(df, spot_df)
+    if basis_available:
+        spot_close = spot_df["close"].reindex(df.index, method="ffill")
+        basis_series = ((df["close"] - spot_close) / spot_close.replace(0.0, np.nan) * 10000.0).replace(
+            [np.inf, -np.inf],
+            0.0,
+        ).fillna(0.0)
+        basis_delta_series = basis_series.diff(3).fillna(0.0)
+        basis_long_series = (basis_series > BASIS_CONFIRM_BP) & (basis_delta_series > 0.0)
+        basis_short_series = (basis_series < -BASIS_CONFIRM_BP) & (basis_delta_series < 0.0)
+    else:
+        basis_long_series = pd.Series(True, index=df.index)
+        basis_short_series = pd.Series(True, index=df.index)
+    basis_long_confirmed = bool(basis_long_series.iloc[-1]) if not basis_long_series.empty else False
+    basis_short_confirmed = bool(basis_short_series.iloc[-1]) if not basis_short_series.empty else False
+
+    expansion_ready_series = (atr_roc_series > ATR_ROC_THRESHOLD) & (compression_count_series > 0)
+    volume_spike_series = volume_z_series > VOLUME_Z_THRESHOLD
+    oi_spike_series = oi_z_aligned > OI_Z_THRESHOLD
+    raw_long_trigger_series = (
+        expansion_ready_series
+        & volume_spike_series
+        & oi_spike_series
+        & (df["close"] > vwap_series)
+        & break_hold_long_series
+        & taker_long_series
+        & basis_long_series
     )
-    short_trigger = (
-        expansion_ready
-        and volume_zscore > VOLUME_Z_THRESHOLD
-        and oi_zscore > OI_Z_THRESHOLD
-        and price < vwap
-        and breakout_distance_atr < 0.0
-        and rs_vs_btc < 0.0
+    raw_short_trigger_series = (
+        expansion_ready_series
+        & volume_spike_series
+        & oi_spike_series
+        & (df["close"] < vwap_series)
+        & break_hold_short_series
+        & taker_short_series
+        & basis_short_series
     )
+    long_trigger_transition = _latest_trigger_transition(raw_long_trigger_series)
+    short_trigger_transition = _latest_trigger_transition(raw_short_trigger_series)
+    long_bars_since_trigger = _bars_since_latest_true(long_trigger_transition)
+    short_bars_since_trigger = _bars_since_latest_true(short_trigger_transition)
+    fresh_limit = FRESH_TRIGGER_BARS.get(interval, 2)
+    long_trigger = bool(raw_long_trigger_series.iloc[-1]) and long_bars_since_trigger <= fresh_limit
+    short_trigger = bool(raw_short_trigger_series.iloc[-1]) and short_bars_since_trigger <= fresh_limit
+    if long_bars_since_trigger <= short_bars_since_trigger:
+        bars_since_trigger = long_bars_since_trigger
+        trigger_direction = "Long" if long_bars_since_trigger < 999 else "None"
+    else:
+        bars_since_trigger = short_bars_since_trigger
+        trigger_direction = "Short" if short_bars_since_trigger < 999 else "None"
+    trigger_fresh = bool((long_trigger and trigger_direction == "Long") or (short_trigger and trigger_direction == "Short"))
 
     long_score = (
         0.20 * min(100.0, compression_recent_bars * 18.0)
@@ -1413,11 +1564,24 @@ def _ltf_interval_metrics(
         "atr_expansion_score": atr_expansion_score,
         "volume_zscore": volume_zscore,
         "oi_zscore": oi_zscore,
+        "taker_imbalance": taker_imbalance,
+        "cvd_3bar_slope": cvd_3bar_slope,
+        "taker_long_confirmed": taker_long_confirmed,
+        "taker_short_confirmed": taker_short_confirmed,
+        "basis_bp": basis_bp,
+        "basis_delta_3bar_bp": basis_delta_3bar_bp,
+        "basis_available": basis_available,
+        "basis_long_confirmed": basis_long_confirmed,
+        "basis_short_confirmed": basis_short_confirmed,
         "price_distance_from_vwap_atr": price_distance_from_vwap_atr,
         "breakout_distance_atr": breakout_distance_atr,
+        "break_hold_confirmed": break_hold_confirmed,
         "range_position": range_position,
         "range_width_atr": range_width_atr,
         "compression_recent_bars": compression_recent_bars,
+        "bars_since_trigger": bars_since_trigger,
+        "trigger_fresh": trigger_fresh,
+        "trigger_direction": trigger_direction,
         "rs_vs_btc": rs_vs_btc,
         "rs_vs_eth": rs_vs_eth,
     }
@@ -3306,6 +3470,7 @@ def build_ltf_regime_metrics(
     candidates = _candidate_symbols(symbols, ticker_stats, min_quote_volume, min_trades)
     context_symbols = tuple(sorted(set(candidates + (ETH_SYMBOL,))))
     contexts = fetch_ltf_symbol_contexts(context_symbols)
+    spot_contexts = fetch_ltf_spot_contexts(candidates)
     btc_context = contexts.get(BTC_SYMBOL)
     eth_context = contexts.get(ETH_SYMBOL)
     if not btc_context:
@@ -3324,8 +3489,11 @@ def build_ltf_regime_metrics(
 
         klines = context.get("klines", {})
         oi_hist = context.get("oi_hist", {})
+        spot_klines = spot_contexts.get(symbol, {}).get("klines", {})
         if not isinstance(klines, dict) or not isinstance(oi_hist, dict):
             continue
+        if not isinstance(spot_klines, dict):
+            spot_klines = {}
 
         latest_oi_values = [
             float(frame["oi_value"].iloc[-1])
@@ -3340,14 +3508,17 @@ def build_ltf_regime_metrics(
             df = klines.get(interval)
             btc_df = btc_klines.get(interval) if isinstance(btc_klines, dict) else None
             eth_df = eth_klines.get(interval) if isinstance(eth_klines, dict) else None
+            spot_df = spot_klines.get(interval)
             oi_df = oi_hist.get(interval, pd.DataFrame())
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
             if not isinstance(btc_df, pd.DataFrame) or btc_df.empty:
                 continue
+            if not isinstance(spot_df, pd.DataFrame):
+                spot_df = None
             if not isinstance(oi_df, pd.DataFrame):
                 oi_df = pd.DataFrame()
-            row = _ltf_interval_metrics(symbol, interval, df, oi_df, btc_df, eth_df)
+            row = _ltf_interval_metrics(symbol, interval, df, oi_df, btc_df, eth_df, spot_df)
             row["oi_value"] = oi_value
             row["quote_volume_24h"] = float(ticker_stats.get(symbol, {}).get("quote_volume_24h", 0.0))
             rows.append(row)
@@ -3368,18 +3539,26 @@ def build_ltf_regime_metrics(
     )
 
     for interval in LTF_INTERVALS:
-        tf_scores = interval_df[interval_df["timeframe"] == interval].set_index("symbol")["ignition_score"]
+        interval_slice = interval_df[interval_df["timeframe"] == interval].set_index("symbol")
+        tf_scores = interval_slice["ignition_score"]
         out[f"ignition_score_{interval}"] = out["symbol"].map(tf_scores).fillna(0.0)
+        out[f"direction_{interval}"] = out["symbol"].map(interval_slice["ignition_state"].map(_direction_from_state)).fillna("Neutral")
+        out[f"fresh_{interval}"] = out["symbol"].map(interval_slice["trigger_fresh"]).fillna(False).astype(bool)
+        out[f"bars_since_trigger_{interval}"] = out["symbol"].map(interval_slice["bars_since_trigger"]).fillna(999).astype(int)
 
-    out["ltf_direction"] = out["ignition_state"].map(
-        lambda value: "Long"
-        if str(value).startswith("Long")
-        else "Short"
-        if str(value).startswith("Short")
-        else "Compression"
-        if str(value) == "Compression"
-        else "Neutral"
-    )
+    out["ltf_direction"] = out["ignition_state"].map(_direction_from_state)
+    for direction in ("Long", "Short"):
+        out[f"tf_{direction.lower()}_alignment"] = sum(
+            (out.get(f"direction_{interval}", pd.Series("Neutral", index=out.index)) == direction).astype(int)
+            for interval in LTF_INTERVALS
+        )
+    out["tf_alignment_score"] = np.select(
+        [out["ltf_direction"].eq("Long"), out["ltf_direction"].eq("Short")],
+        [out["tf_long_alignment"], out["tf_short_alignment"]],
+        default=0,
+    ).astype(int)
+    out["tf_alignment_pass"] = out["tf_alignment_score"] >= MIN_TF_ALIGNMENT
+    out["fresh_setup_pass"] = out["bars_since_trigger"] <= MAX_BEST_SETUP_TRIGGER_BARS
     return out.sort_values(["ltf_ignition_score", "volume_zscore", "oi_zscore"], ascending=False).reset_index(drop=True)
 
 
@@ -3463,6 +3642,12 @@ def _regime_scatter(df: pd.DataFrame, x: str, y: str, color: str, title: str, x_
             "atr_roc",
             "volume_zscore",
             "oi_zscore",
+            "taker_imbalance",
+            "cvd_3bar_slope",
+            "basis_bp",
+            "basis_delta_3bar_bp",
+            "bars_since_trigger",
+            "tf_alignment_score",
             "breakout_distance_atr",
             "rs_vs_btc",
             "rs_vs_eth",
@@ -3514,11 +3699,18 @@ def _show_ltf_ignition_table(df: pd.DataFrame):
         "atr_expansion_score",
         "volume_zscore",
         "oi_zscore",
+        "taker_imbalance",
+        "cvd_3bar_slope",
+        "basis_bp",
+        "basis_delta_3bar_bp",
         "price_distance_from_vwap_atr",
         "breakout_distance_atr",
+        "break_hold_confirmed",
         "rs_vs_btc",
         "rs_vs_eth",
         "compression_recent_bars",
+        "bars_since_trigger",
+        "tf_alignment_score",
         "ignition_score_5m",
         "ignition_score_15m",
         "ignition_score_1h",
@@ -3540,11 +3732,18 @@ def _show_ltf_ignition_table(df: pd.DataFrame):
             "atr_expansion_score": st.column_config.NumberColumn("Expansion", format="%.1f"),
             "volume_zscore": st.column_config.NumberColumn("Vol Z", format="%.2f"),
             "oi_zscore": st.column_config.NumberColumn("OI Z", format="%.2f"),
+            "taker_imbalance": st.column_config.NumberColumn("Taker", format="%.2f"),
+            "cvd_3bar_slope": st.column_config.NumberColumn("CVD 3", format="%.0f"),
+            "basis_bp": st.column_config.NumberColumn("Basis bp", format="%.1f"),
+            "basis_delta_3bar_bp": st.column_config.NumberColumn("Basis d3", format="%.1f"),
             "price_distance_from_vwap_atr": st.column_config.NumberColumn("VWAP Dist ATR", format="%.2f"),
             "breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
+            "break_hold_confirmed": st.column_config.CheckboxColumn("Hold"),
             "rs_vs_btc": st.column_config.TextColumn("RS BTC"),
             "rs_vs_eth": st.column_config.TextColumn("RS ETH"),
             "compression_recent_bars": st.column_config.NumberColumn("Comp Bars", format="%d"),
+            "bars_since_trigger": st.column_config.NumberColumn("Age", format="%d"),
+            "tf_alignment_score": st.column_config.NumberColumn("TF Align", format="%d"),
             "ignition_score_5m": st.column_config.NumberColumn("5m", format="%.1f"),
             "ignition_score_15m": st.column_config.NumberColumn("15m", format="%.1f"),
             "ignition_score_1h": st.column_config.NumberColumn("1h", format="%.1f"),
@@ -3606,6 +3805,16 @@ def _build_best_setups(ltf_df: pd.DataFrame, htf_df: pd.DataFrame) -> pd.DataFra
     if ltf_df.empty or htf_df.empty:
         return pd.DataFrame()
 
+    required_cols = {"tf_alignment_pass", "fresh_setup_pass", "ltf_direction"}
+    if required_cols.issubset(ltf_df.columns):
+        ltf_df = ltf_df[
+            ltf_df["tf_alignment_pass"]
+            & ltf_df["fresh_setup_pass"]
+            & ltf_df["ltf_direction"].isin(["Long", "Short"])
+        ].copy()
+        if ltf_df.empty:
+            return ltf_df
+
     htf_cols = [
         "symbol",
         "htf_expansion_direction",
@@ -3658,8 +3867,14 @@ def _show_best_setups_table(df: pd.DataFrame):
         "htf_expansion_direction",
         "htf_expansion_score",
         "alignment_score",
+        "tf_alignment_score",
+        "bars_since_trigger",
         "volume_zscore",
         "oi_zscore",
+        "taker_imbalance",
+        "cvd_3bar_slope",
+        "basis_bp",
+        "basis_delta_3bar_bp",
         "atr_percentile",
         "atr_roc",
         "breakout_distance_atr",
@@ -3682,8 +3897,14 @@ def _show_best_setups_table(df: pd.DataFrame):
             "htf_expansion_direction": st.column_config.TextColumn("HTF State"),
             "htf_expansion_score": st.column_config.NumberColumn("HTF Expansion", format="%.1f"),
             "alignment_score": st.column_config.NumberColumn("Align", format="%.1f"),
+            "tf_alignment_score": st.column_config.NumberColumn("TF Align", format="%d"),
+            "bars_since_trigger": st.column_config.NumberColumn("Age", format="%d"),
             "volume_zscore": st.column_config.NumberColumn("Vol Z", format="%.2f"),
             "oi_zscore": st.column_config.NumberColumn("OI Z", format="%.2f"),
+            "taker_imbalance": st.column_config.NumberColumn("Taker", format="%.2f"),
+            "cvd_3bar_slope": st.column_config.NumberColumn("CVD 3", format="%.0f"),
+            "basis_bp": st.column_config.NumberColumn("Basis bp", format="%.1f"),
+            "basis_delta_3bar_bp": st.column_config.NumberColumn("Basis d3", format="%.1f"),
             "atr_percentile": st.column_config.NumberColumn("ATR %ile", format="%.1f"),
             "atr_roc": st.column_config.TextColumn("ATR ROC"),
             "breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
@@ -3778,12 +3999,16 @@ def _render_ltf_scalping_dashboard(
     view: str,
 ):
     st.subheader("LTF Ignition")
-    st.caption("Native 5m, 15m, and 1h ATR regime scan across all liquidity-qualified alts.")
+    st.caption("Native 5m, 15m, and 1h ATR regime scan with fresh-trigger, taker/CVD, basis, and break-hold gates.")
     if ltf_df.empty:
         ignition_df = ltf_df
     else:
-        ignition_df = ltf_df[ltf_df["ltf_ignition_score"] >= float(min_score)].sort_values(
-            ["ltf_ignition_score", "volume_zscore", "oi_zscore"],
+        ignition_df = ltf_df[
+            (ltf_df["ltf_ignition_score"] >= float(min_score))
+            & ltf_df["trigger_fresh"]
+            & ltf_df["fresh_setup_pass"]
+        ].sort_values(
+            ["ltf_ignition_score", "tf_alignment_score", "volume_zscore", "oi_zscore"],
             ascending=False,
         )
 
@@ -3854,7 +4079,7 @@ def _render_best_setups_dashboard(
     top_n: int,
 ):
     st.subheader("Best Setups")
-    st.caption("Combined view: accurate LTF ignition first, then HTF expansion/compression context for alignment.")
+    st.caption("Fresh LTF triggers only: 2-of-3 timeframe alignment, CVD/taker confirmation, basis confirmation, and HTF context.")
     best_df = _build_best_setups(ltf_df, df)
     if not best_df.empty:
         best_df = best_df[best_df["best_setup_score"] >= float(min_score)].sort_values("best_setup_score", ascending=False)
