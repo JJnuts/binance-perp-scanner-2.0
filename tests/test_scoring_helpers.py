@@ -110,6 +110,55 @@ class ScoringHelperTests(unittest.TestCase):
         ]:
             self.assertIn(field, row)
 
+    def test_daily_swing_context_emits_swing_fields(self):
+        idx = pd.date_range("2026-01-01", periods=60, freq="1D")
+        close = pd.Series([100.0 + i * 0.5 for i in range(60)], index=idx)
+        daily = pd.DataFrame(
+            {
+                "open": close - 0.3,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "vol": [100.0 + i for i in range(60)],
+                "quote_vol": [10000.0 + i * 250.0 for i in range(60)],
+                "trades": [100 + i for i in range(60)],
+                "tb_quote": [5200.0 + i * 130.0 for i in range(60)],
+            },
+            index=idx,
+        )
+        daily.iloc[-1, daily.columns.get_loc("close")] = daily["high"].iloc[-2] + 2.0
+        daily.iloc[-1, daily.columns.get_loc("high")] = daily["close"].iloc[-1] + 1.0
+        oi = pd.DataFrame({"oi_value": [1000.0 + i * 10.0 for i in range(20)]}, index=idx[-20:])
+
+        context = scanner._daily_swing_context(daily, oi, daily)
+
+        self.assertIn("daily_structure_score", context)
+        self.assertTrue(context["daily_close_above_prior_high"])
+        self.assertGreaterEqual(context["daily_oi_persistence_days"], 1)
+        self.assertGreaterEqual(context["daily_volume_persistence_days"], 1)
+
+    def test_btc_daily_regime_scores_bull_trend(self):
+        idx = pd.date_range("2026-01-01", periods=60, freq="1D")
+        close = pd.Series([100.0 + i for i in range(60)], index=idx)
+        daily = pd.DataFrame(
+            {
+                "open": close - 0.5,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "vol": 100.0,
+                "quote_vol": 10000.0,
+                "trades": 100,
+                "tb_quote": 5200.0,
+            },
+            index=idx,
+        )
+
+        regime = scanner._btc_daily_regime(daily)
+
+        self.assertEqual(regime["btc_daily_regime"], "Bull trend")
+        self.assertGreater(regime["btc_long_multiplier"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

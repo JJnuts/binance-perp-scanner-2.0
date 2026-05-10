@@ -36,6 +36,8 @@ LTF_INTERVALS = ("5m", "15m", "1h")
 LTF_KLINE_LIMITS = {"5m": 240, "15m": 240, "1h": 240}
 LTF_OI_LIMIT = 120
 LTF_CACHE_TTL = 45
+HTF_DAILY_LIMIT = 120
+HTF_DAILY_OI_LIMIT = 60
 ATR_PERIOD = 14
 ATR_PERCENTILE_LOOKBACK = 120
 ATR_ROC_LOOKBACK = 3
@@ -1159,6 +1161,37 @@ def _fetch_ltf_symbol_context(symbol: str) -> tuple[str, dict[str, pd.DataFrame]
     return symbol, klines, oi_hist
 
 
+def _fetch_htf_daily_symbol_context(symbol: str) -> tuple[str, Optional[pd.DataFrame], pd.DataFrame, Optional[pd.DataFrame]]:
+    daily = None
+    spot_daily = None
+    daily_oi = pd.DataFrame()
+    try:
+        daily = _fetch_klines_interval(symbol, "1d", HTF_DAILY_LIMIT)
+    except Exception:
+        daily = None
+    try:
+        daily_oi = _fetch_open_interest_hist_frame(symbol, "1d", HTF_DAILY_OI_LIMIT)
+    except Exception:
+        daily_oi = pd.DataFrame()
+    try:
+        spot_daily = _fetch_spot_klines_interval(symbol, "1d", HTF_DAILY_LIMIT)
+    except Exception:
+        spot_daily = None
+    return symbol, daily, daily_oi, spot_daily
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def fetch_htf_daily_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_htf_daily_symbol_context, symbol): symbol for symbol in symbols}
+        for fut in as_completed(futures):
+            symbol, daily, daily_oi, spot_daily = fut.result()
+            if daily is not None and not daily.empty:
+                out[symbol] = {"daily": daily, "daily_oi": daily_oi, "spot_daily": spot_daily}
+    return out
+
+
 @st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
 def fetch_ltf_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
@@ -1384,6 +1417,166 @@ def _basis_context(perp_df: pd.DataFrame, spot_df: Optional[pd.DataFrame]) -> tu
         return 0.0, 0.0, False
     basis = basis.ffill().fillna(0.0)
     return float(basis.iloc[-1]), float(basis.diff(3).fillna(0.0).iloc[-1]), True
+
+
+def _pivot_levels(series: pd.Series, mode: str, lookback: int = 14, wing: int = 2) -> list[float]:
+    recent = series.tail(lookback + wing).dropna()
+    levels: list[float] = []
+    if len(recent) < wing * 2 + 1:
+        return levels
+    values = recent.to_numpy()
+    for idx in range(wing, len(values) - wing):
+        window = values[idx - wing : idx + wing + 1]
+        current = values[idx]
+        if mode == "high" and current == float(np.max(window)) and current > float(np.max(np.delete(window, wing))):
+            levels.append(float(current))
+        if mode == "low" and current == float(np.min(window)) and current < float(np.min(np.delete(window, wing))):
+            levels.append(float(current))
+    return levels[-3:]
+
+
+def _consecutive_true_tail(series: pd.Series) -> int:
+    count = 0
+    for value in reversed(series.fillna(False).astype(bool).tolist()):
+        if not value:
+            break
+        count += 1
+    return count
+
+
+def _daily_swing_context(daily_df: Optional[pd.DataFrame], daily_oi: pd.DataFrame, spot_daily: Optional[pd.DataFrame]) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "daily_close_above_prior_high": False,
+        "daily_close_below_prior_low": False,
+        "daily_atr_percentile": 50.0,
+        "daily_volume_ratio": 0.0,
+        "daily_volume_persistence_days": 0,
+        "daily_oi_persistence_days": 0,
+        "daily_basis_bp": 0.0,
+        "daily_basis_delta_3d_bp": 0.0,
+        "daily_swing_high": 0.0,
+        "daily_swing_low": 0.0,
+        "daily_reclaim_high": False,
+        "daily_reject_high": False,
+        "daily_hold_above_swing_high": False,
+        "daily_lose_swing_low": False,
+        "daily_structure_score": 0.0,
+        "daily_long_confirmed": False,
+        "daily_short_confirmed": False,
+    }
+    if daily_df is None or daily_df.empty or len(daily_df) < 25:
+        return defaults
+
+    df = daily_df.copy()
+    close = df["close"]
+    price = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
+    prior_high = float(df["high"].iloc[-2])
+    prior_low = float(df["low"].iloc[-2])
+    atr = _atr_series(df)
+    atr_percentile = float(_rolling_percentile(atr).iloc[-1]) if not atr.empty else 50.0
+    volume_baseline = float(df["quote_vol"].iloc[-21:-1].mean()) if len(df) > 21 else 0.0
+    volume_ratio = float(df["quote_vol"].iloc[-1] / volume_baseline) if volume_baseline > 0 else 0.0
+    volume_persistence = _consecutive_true_tail(df["quote_vol"] > df["quote_vol"].shift(1).rolling(20).mean())
+
+    pivot_highs = _pivot_levels(df["high"], "high")
+    pivot_lows = _pivot_levels(df["low"], "low")
+    swing_high = max(pivot_highs) if pivot_highs else float(df["high"].iloc[-15:-1].max())
+    swing_low = min(pivot_lows) if pivot_lows else float(df["low"].iloc[-15:-1].min())
+    reclaim_high = price > swing_high and prev_close <= swing_high and volume_ratio >= 1.05
+    reject_high = float(df["high"].iloc[-1]) >= swing_high and price < swing_high and volume_ratio >= 1.05
+    hold_above_swing_high = price > swing_high and float(df["low"].iloc[-1]) > swing_high
+    lose_swing_low = price < swing_low and prev_close >= swing_low
+
+    oi_persistence = 0
+    if isinstance(daily_oi, pd.DataFrame) and not daily_oi.empty and len(daily_oi) > 3:
+        oi_persistence = _consecutive_true_tail(daily_oi["oi_value"].diff() > 0)
+
+    basis_bp, basis_delta_3d_bp, basis_available = _basis_context(df, spot_daily)
+    ema20 = _ema(close, 20)
+    ema50 = _ema(close, 50)
+    daily_close_above_prior_high = price > prior_high
+    daily_close_below_prior_low = price < prior_low
+    daily_long_score = float(
+        np.clip(
+            25.0 * float(daily_close_above_prior_high)
+            + 20.0 * float(reclaim_high or hold_above_swing_high)
+            + 15.0 * float(price > ema20)
+            + 15.0 * float(ema20 > ema50)
+            + 15.0 * np.clip(volume_ratio / 1.5, 0.0, 1.0)
+            + 10.0 * np.clip(oi_persistence / 3.0, 0.0, 1.0),
+            0.0,
+            100.0,
+        )
+    )
+    daily_short_score = float(
+        np.clip(
+            25.0 * float(daily_close_below_prior_low)
+            + 20.0 * float(reject_high or lose_swing_low)
+            + 15.0 * float(price < ema20)
+            + 15.0 * float(ema20 < ema50)
+            + 15.0 * np.clip(volume_ratio / 1.5, 0.0, 1.0)
+            + 10.0 * np.clip(oi_persistence / 3.0, 0.0, 1.0),
+            0.0,
+            100.0,
+        )
+    )
+    return {
+        "daily_close_above_prior_high": bool(daily_close_above_prior_high),
+        "daily_close_below_prior_low": bool(daily_close_below_prior_low),
+        "daily_atr_percentile": atr_percentile,
+        "daily_volume_ratio": volume_ratio,
+        "daily_volume_persistence_days": int(volume_persistence),
+        "daily_oi_persistence_days": int(oi_persistence),
+        "daily_basis_bp": basis_bp if basis_available else 0.0,
+        "daily_basis_delta_3d_bp": basis_delta_3d_bp if basis_available else 0.0,
+        "daily_swing_high": swing_high,
+        "daily_swing_low": swing_low,
+        "daily_reclaim_high": bool(reclaim_high),
+        "daily_reject_high": bool(reject_high),
+        "daily_hold_above_swing_high": bool(hold_above_swing_high),
+        "daily_lose_swing_low": bool(lose_swing_low),
+        "daily_structure_score": max(daily_long_score, daily_short_score),
+        "daily_long_score": daily_long_score,
+        "daily_short_score": daily_short_score,
+        "daily_long_confirmed": bool(daily_long_score >= 55.0 and (daily_close_above_prior_high or reclaim_high or hold_above_swing_high)),
+        "daily_short_confirmed": bool(daily_short_score >= 55.0 and (daily_close_below_prior_low or reject_high or lose_swing_low)),
+    }
+
+
+def _btc_daily_regime(daily_df: Optional[pd.DataFrame]) -> dict[str, object]:
+    if daily_df is None or daily_df.empty or len(daily_df) < 55:
+        return {"btc_daily_regime": "Unknown", "btc_daily_regime_score": 50.0, "btc_long_multiplier": 1.0, "btc_short_multiplier": 1.0}
+    close = daily_df["close"]
+    price = float(close.iloc[-1])
+    ema20 = _ema(close, 20)
+    ema50 = _ema(close, 50)
+    ret_7d = _return_n(close, 7)
+    prior_high = float(daily_df["high"].iloc[-2])
+    prior_low = float(daily_df["low"].iloc[-2])
+    score = float(
+        np.clip(
+            25.0 * float(price > ema20)
+            + 25.0 * float(ema20 > ema50)
+            + 20.0 * float(ret_7d > 0)
+            + 15.0 * float(price > prior_high)
+            + 15.0 * float(price > prior_low),
+            0.0,
+            100.0,
+        )
+    )
+    if score >= 70:
+        regime = "Bull trend"
+    elif score <= 35:
+        regime = "Drawdown"
+    else:
+        regime = "Range"
+    return {
+        "btc_daily_regime": regime,
+        "btc_daily_regime_score": score,
+        "btc_long_multiplier": 1.10 if score >= 70 else 0.82 if score <= 35 else 1.0,
+        "btc_short_multiplier": 1.10 if score <= 35 else 0.88 if score >= 70 else 1.0,
+    }
 
 
 def _ltf_interval_metrics(
@@ -3153,9 +3346,12 @@ def build_metrics(
     ticker_stats = fetch_ticker_stats()
     candidates = _candidate_symbols(symbols, ticker_stats, min_quote_volume, min_trades)
     contexts = fetch_symbol_contexts(candidates)
+    daily_contexts = fetch_htf_daily_contexts(candidates)
     btc_context = contexts.get(BTC_SYMBOL)
     if not btc_context:
         return pd.DataFrame()
+    btc_daily_context = daily_contexts.get(BTC_SYMBOL, {})
+    btc_regime = _btc_daily_regime(btc_daily_context.get("daily") if isinstance(btc_daily_context, dict) else None)
 
     btc_close = btc_context["klines"]["close"]  # type: ignore[index]
     btc_ret_1h = _return_n(btc_close, 1)
@@ -3180,6 +3376,12 @@ def build_metrics(
         funding_trend = float(context["funding_trend"])
         if oi_value < min_oi_value:
             continue
+        daily_context = daily_contexts.get(symbol, {})
+        daily_metrics = _daily_swing_context(
+            daily_context.get("daily") if isinstance(daily_context, dict) else None,
+            daily_context.get("daily_oi", pd.DataFrame()) if isinstance(daily_context, dict) else pd.DataFrame(),
+            daily_context.get("spot_daily") if isinstance(daily_context, dict) else None,
+        )
 
         close = df["close"]
         price = float(close.iloc[-1])
@@ -3327,12 +3529,44 @@ def build_metrics(
             + 0.15 * htf_short_structure_score
             + 0.10 * htf_short_rs_score
         )
+        daily_long_confirmed = bool(daily_metrics.get("daily_long_confirmed", False))
+        daily_short_confirmed = bool(daily_metrics.get("daily_short_confirmed", False))
+        daily_oi_persistence_days = int(daily_metrics.get("daily_oi_persistence_days", 0))
+        daily_volume_persistence_days = int(daily_metrics.get("daily_volume_persistence_days", 0))
+        daily_long_quality = float(daily_metrics.get("daily_long_score", 0.0))
+        daily_short_quality = float(daily_metrics.get("daily_short_score", 0.0))
+        htf_long_expansion_score = float(
+            np.clip(
+                (
+                    0.72 * htf_long_expansion_score
+                    + 0.28 * daily_long_quality
+                    + 4.0 * min(daily_oi_persistence_days, 3)
+                    + 3.0 * min(daily_volume_persistence_days, 3)
+                )
+                * float(btc_regime["btc_long_multiplier"]),
+                0.0,
+                100.0,
+            )
+        )
+        htf_short_expansion_score = float(
+            np.clip(
+                (
+                    0.72 * htf_short_expansion_score
+                    + 0.28 * daily_short_quality
+                    + 4.0 * min(daily_oi_persistence_days, 3)
+                    + 3.0 * min(daily_volume_persistence_days, 3)
+                )
+                * float(btc_regime["btc_short_multiplier"]),
+                0.0,
+                100.0,
+            )
+        )
         if htf_long_expansion_score >= htf_short_expansion_score and htf_long_expansion_score >= 45.0:
-            htf_expansion_direction = "Long expansion"
-            htf_expansion_score = htf_long_expansion_score
+            htf_expansion_direction = "Long expansion" if daily_long_confirmed else "Long watch"
+            htf_expansion_score = htf_long_expansion_score if daily_long_confirmed else htf_long_expansion_score * 0.82
         elif htf_short_expansion_score > htf_long_expansion_score and htf_short_expansion_score >= 45.0:
-            htf_expansion_direction = "Short expansion"
-            htf_expansion_score = htf_short_expansion_score
+            htf_expansion_direction = "Short expansion" if daily_short_confirmed else "Short watch"
+            htf_expansion_score = htf_short_expansion_score if daily_short_confirmed else htf_short_expansion_score * 0.82
         elif htf_atr_percentile < 25.0:
             htf_expansion_direction = "Compression"
             htf_expansion_score = htf_atr_compression_score * 0.60
@@ -3395,6 +3629,9 @@ def build_metrics(
                 "htf_expansion_score": float(np.clip(htf_expansion_score, 0.0, 100.0)),
                 "htf_long_expansion_score": float(np.clip(htf_long_expansion_score, 0.0, 100.0)),
                 "htf_short_expansion_score": float(np.clip(htf_short_expansion_score, 0.0, 100.0)),
+                "btc_daily_regime": str(btc_regime["btc_daily_regime"]),
+                "btc_daily_regime_score": float(btc_regime["btc_daily_regime_score"]),
+                **daily_metrics,
                 "ltf_alpha_raw": ltf_alpha_raw,
                 "htf_alpha_raw": htf_alpha_raw,
                 "vol_adjusted_raw": vol_adjusted_raw,
@@ -3766,6 +4003,17 @@ def _show_htf_expansion_table(df: pd.DataFrame):
         "htf_atr_expansion_score",
         "htf_breakout_distance_atr",
         "htf_range_width_atr",
+        "daily_structure_score",
+        "daily_atr_percentile",
+        "daily_volume_ratio",
+        "daily_volume_persistence_days",
+        "daily_oi_persistence_days",
+        "daily_swing_high",
+        "daily_swing_low",
+        "daily_long_confirmed",
+        "daily_short_confirmed",
+        "btc_daily_regime",
+        "btc_daily_regime_score",
         "htf_momentum_score",
         "htf_setup_score",
         "htf_relative_strength_score",
@@ -3790,6 +4038,17 @@ def _show_htf_expansion_table(df: pd.DataFrame):
             "htf_atr_expansion_score": st.column_config.NumberColumn("ATR Expand", format="%.1f"),
             "htf_breakout_distance_atr": st.column_config.NumberColumn("Breakout ATR", format="%.2f"),
             "htf_range_width_atr": st.column_config.NumberColumn("Range ATR", format="%.2f"),
+            "daily_structure_score": st.column_config.NumberColumn("Daily Struct", format="%.1f"),
+            "daily_atr_percentile": st.column_config.NumberColumn("D ATR %ile", format="%.1f"),
+            "daily_volume_ratio": st.column_config.NumberColumn("D Vol", format="%.2f"),
+            "daily_volume_persistence_days": st.column_config.NumberColumn("Vol Days", format="%d"),
+            "daily_oi_persistence_days": st.column_config.NumberColumn("OI Days", format="%d"),
+            "daily_swing_high": st.column_config.NumberColumn("Swing High", format="%.4g"),
+            "daily_swing_low": st.column_config.NumberColumn("Swing Low", format="%.4g"),
+            "daily_long_confirmed": st.column_config.CheckboxColumn("D Long"),
+            "daily_short_confirmed": st.column_config.CheckboxColumn("D Short"),
+            "btc_daily_regime": st.column_config.TextColumn("BTC Regime"),
+            "btc_daily_regime_score": st.column_config.NumberColumn("BTC Score", format="%.1f"),
             "htf_momentum_score": st.column_config.NumberColumn("HTF Momentum", format="%.1f"),
             "htf_setup_score": st.column_config.NumberColumn("HTF Setup", format="%.1f"),
             "htf_relative_strength_score": st.column_config.NumberColumn("HTF RS", format="%.1f"),
@@ -3824,6 +4083,16 @@ def _build_best_setups(ltf_df: pd.DataFrame, htf_df: pd.DataFrame) -> pd.DataFra
         "htf_atr_percentile",
         "htf_atr_roc",
         "htf_breakout_distance_atr",
+        "daily_structure_score",
+        "daily_long_confirmed",
+        "daily_short_confirmed",
+        "daily_volume_ratio",
+        "daily_volume_persistence_days",
+        "daily_oi_persistence_days",
+        "daily_swing_high",
+        "daily_swing_low",
+        "btc_daily_regime",
+        "btc_daily_regime_score",
         "rs_24h",
         "rs_72h",
     ]
@@ -3833,6 +4102,8 @@ def _build_best_setups(ltf_df: pd.DataFrame, htf_df: pd.DataFrame) -> pd.DataFra
 
     long_aligned = (merged["ltf_direction"] == "Long") & merged["htf_expansion_direction"].str.startswith("Long")
     short_aligned = (merged["ltf_direction"] == "Short") & merged["htf_expansion_direction"].str.startswith("Short")
+    long_aligned = long_aligned & merged["daily_long_confirmed"].fillna(False)
+    short_aligned = short_aligned & merged["daily_short_confirmed"].fillna(False)
     compression_context = merged["htf_expansion_direction"].eq("Compression")
     merged["alignment_score"] = np.select(
         [long_aligned | short_aligned, compression_context],
@@ -3866,6 +4137,10 @@ def _show_best_setups_table(df: pd.DataFrame):
         "ltf_ignition_score",
         "htf_expansion_direction",
         "htf_expansion_score",
+        "daily_structure_score",
+        "daily_volume_persistence_days",
+        "daily_oi_persistence_days",
+        "btc_daily_regime",
         "alignment_score",
         "tf_alignment_score",
         "bars_since_trigger",
@@ -3896,6 +4171,10 @@ def _show_best_setups_table(df: pd.DataFrame):
             "ltf_ignition_score": st.column_config.NumberColumn("LTF Ignition", format="%.1f"),
             "htf_expansion_direction": st.column_config.TextColumn("HTF State"),
             "htf_expansion_score": st.column_config.NumberColumn("HTF Expansion", format="%.1f"),
+            "daily_structure_score": st.column_config.NumberColumn("Daily Struct", format="%.1f"),
+            "daily_volume_persistence_days": st.column_config.NumberColumn("Vol Days", format="%d"),
+            "daily_oi_persistence_days": st.column_config.NumberColumn("OI Days", format="%d"),
+            "btc_daily_regime": st.column_config.TextColumn("BTC Regime"),
             "alignment_score": st.column_config.NumberColumn("Align", format="%.1f"),
             "tf_alignment_score": st.column_config.NumberColumn("TF Align", format="%d"),
             "bars_since_trigger": st.column_config.NumberColumn("Age", format="%d"),
@@ -4043,9 +4322,9 @@ def _render_htf_momentum_dashboard(
     view: str,
 ):
     st.subheader("HTF Expansion")
-    st.caption("Lighter HTF context derived from the existing 1h history, with ATR compression/expansion and structure checks.")
+    st.caption("Swing context: 1h expansion plus daily candle structure, pivot reclaim/rejection, BTC regime, OI persistence, and volume persistence.")
     expansion_df = df[df["htf_expansion_score"] >= float(min_score)].sort_values(
-        ["htf_expansion_score", "htf_momentum_score"],
+        ["htf_expansion_score", "daily_structure_score", "daily_oi_persistence_days"],
         ascending=False,
     )
 
