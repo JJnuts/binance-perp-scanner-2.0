@@ -159,6 +159,73 @@ class ScoringHelperTests(unittest.TestCase):
         self.assertEqual(regime["btc_daily_regime"], "Bull trend")
         self.assertGreater(regime["btc_long_multiplier"], 1.0)
 
+    def _sample_options_df(self):
+        now = scanner._utc_now_naive()
+        rows = []
+        for hours, label in [(8, "0DTE"), (72, "3D"), (720, "30D")]:
+            expiry = now + pd.Timedelta(hours=hours)
+            for opt_type, delta, strike, iv in [
+                ("call", 0.25, 105.0, 62.0),
+                ("call", 0.50, 100.0, 60.0),
+                ("put", -0.25, 95.0, 66.0),
+                ("put", -0.50, 100.0, 64.0),
+            ]:
+                rows.append(
+                    {
+                        "expiry_label": label,
+                        "expiration_ts": expiry,
+                        "strike": strike,
+                        "option_type": opt_type,
+                        "effective_iv": iv,
+                        "delta": delta,
+                        "gamma": 0.001,
+                        "vega": 1.2,
+                        "open_interest": 10.0,
+                        "contract_size": 1.0,
+                        "hours_to_expiry": hours,
+                        "moneyness_pct": (strike / 100.0 - 1.0) * 100.0,
+                        "gex_abs": 10.0,
+                        "call_gex": 10.0 if opt_type == "call" else 0.0,
+                        "put_gex": 10.0 if opt_type == "put" else 0.0,
+                        "signed_gex": 10.0 if opt_type == "call" else -10.0,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_front_gex_summary_and_pin_candidate(self):
+        options = self._sample_options_df()
+
+        front = scanner._front_gex_summary(options, 100.0, 24, "Front 24H")
+        pin = scanner._pin_candidate(options, 100.0)
+
+        self.assertGreater(front["abs_gex"], 0.0)
+        self.assertEqual(front["contracts"], 4)
+        self.assertGreater(pin["pin_score"], 0.0)
+        self.assertEqual(pin["pin_strike"], 100.0)
+
+    def test_risk_reversal_and_term_structure(self):
+        options = self._sample_options_df()
+        rr = scanner._risk_reversal_by_expiry(options)
+        atm_iv = pd.DataFrame(
+            {
+                "expiry_label": ["0DTE", "30D"],
+                "expiration_ts": [options["expiration_ts"].min(), options["expiration_ts"].max()],
+                "effective_iv": [70.0, 60.0],
+            }
+        )
+
+        term = scanner._iv_term_structure(atm_iv)
+
+        self.assertFalse(rr.empty)
+        self.assertAlmostEqual(rr["risk_reversal"].iloc[0], -4.0)
+        self.assertEqual(term["term_regime"], "Backwardation")
+
+    def test_pressure_forecast_is_labeled_estimate(self):
+        pressure = scanner._pressure_forecast(self._sample_options_df(), iv_change_points=-2.0)
+
+        self.assertIn("Estimated", pressure["pressure_copy"])
+        self.assertIn(pressure["pressure_bias"], {"Upside pressure", "Downside pressure", "Neutral"})
+
 
 if __name__ == "__main__":
     unittest.main()

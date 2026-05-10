@@ -10,6 +10,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from html import escape
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -92,6 +93,11 @@ BTC_BUBBLE_LOOKBACK = 365
 BTC_OPTIONS_MAX_CONTRACTS = 180
 BTC_OPTIONS_MAX_DAYS = 120
 BTC_OPTIONS_KLINE_LIMIT = 576
+BTC_OPTIONS_HISTORY_PATH = Path(__file__).with_name("data") / "btc_options_history.csv"
+FRONT_DAY_HOURS = 24
+FRONT_WEEK_DAYS = 7
+PIN_MAX_HOURS = 24
+PIN_DISTANCE_PCT = 2.0
 BTC_BUBBLE_TIMEFRAMES = {
     "1D": {
         "label": "1D",
@@ -1896,7 +1902,7 @@ def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
 
 
 def _fetch_coinbase_spot_btc(limit: int, granularity: int, rule: Optional[str]) -> pd.DataFrame:
-    end = pd.Timestamp.utcnow().floor("h")
+    end = _utc_now_naive().floor("h")
     frames = []
     chunk_points = 290
     remaining = limit + 8
@@ -2153,6 +2159,10 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _utc_now_naive() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="UTC").tz_localize(None)
+
+
 def _format_gex_billions(gex_millions: float, signed: bool = False) -> str:
     value = _safe_float(gex_millions) / 1000.0
     sign = "+" if signed and value > 0 else ""
@@ -2382,6 +2392,205 @@ def _find_gamma_flip(strike_df: pd.DataFrame) -> Optional[float]:
     return float(strike_df.loc[idx, "strike"])
 
 
+def _strike_map_for_options(options_df: pd.DataFrame) -> pd.DataFrame:
+    if options_df.empty:
+        return pd.DataFrame(columns=["strike", "call_gex", "put_gex", "signed_gex", "abs_gex", "total_oi", "avg_iv"])
+    return (
+        options_df.groupby("strike", as_index=False)
+        .agg(
+            call_gex=("call_gex", "sum"),
+            put_gex=("put_gex", "sum"),
+            signed_gex=("signed_gex", "sum"),
+            abs_gex=("gex_abs", "sum"),
+            total_oi=("open_interest", "sum"),
+            avg_iv=("effective_iv", "mean"),
+        )
+        .sort_values("strike")
+    )
+
+
+def _front_gex_summary(options_df: pd.DataFrame, spot: float, max_hours: float, label: str) -> dict[str, object]:
+    front = options_df[(options_df["hours_to_expiry"] > 0) & (options_df["hours_to_expiry"] <= max_hours)].copy()
+    if front.empty:
+        return {
+            "label": label,
+            "contracts": 0,
+            "abs_gex": 0.0,
+            "signed_gex": 0.0,
+            "call_gex": 0.0,
+            "put_gex": 0.0,
+            "top_strike": 0.0,
+            "top_distance_pct": 0.0,
+            "top_abs_gex": 0.0,
+            "strike_map": _strike_map_for_options(front),
+        }
+    strike_map = _strike_map_for_options(front)
+    top = strike_map.sort_values("abs_gex", ascending=False).iloc[0]
+    top_strike = _safe_float(top.get("strike"))
+    return {
+        "label": label,
+        "contracts": int(len(front)),
+        "abs_gex": float(front["gex_abs"].sum()),
+        "signed_gex": float(front["signed_gex"].sum()),
+        "call_gex": float(front["call_gex"].sum()),
+        "put_gex": float(front["put_gex"].sum()),
+        "top_strike": top_strike,
+        "top_distance_pct": ((top_strike / spot) - 1.0) * 100.0 if spot > 0 else 0.0,
+        "top_abs_gex": _safe_float(top.get("abs_gex")),
+        "strike_map": strike_map,
+    }
+
+
+def _pin_candidate(options_df: pd.DataFrame, spot: float) -> dict[str, object]:
+    front = options_df[(options_df["hours_to_expiry"] > 0) & (options_df["hours_to_expiry"] <= PIN_MAX_HOURS)].copy()
+    if front.empty:
+        return {"pin_score": 0.0, "pin_strike": 0.0, "pin_expiry": "", "hours_to_expiry": 0.0, "distance_pct": 0.0, "pin_copy": "No front-24h pin candidate is visible."}
+    pin_map = (
+        front.groupby(["expiration_ts", "expiry_label", "strike"], as_index=False)
+        .agg(abs_gex=("gex_abs", "sum"), total_oi=("open_interest", "sum"))
+        .assign(distance_pct=lambda df: ((df["strike"] / spot) - 1.0).abs() * 100.0)
+    )
+    nearby = pin_map[pin_map["distance_pct"] <= PIN_DISTANCE_PCT].copy()
+    if nearby.empty:
+        return {"pin_score": 0.0, "pin_strike": 0.0, "pin_expiry": "", "hours_to_expiry": 0.0, "distance_pct": 0.0, "pin_copy": "No high-GEX strike is close enough to spot for a clean pin read."}
+    total_front_gex = float(front["gex_abs"].sum())
+    nearby["concentration"] = nearby["abs_gex"] / max(total_front_gex, 1e-12)
+    nearby["hours_to_expiry"] = (nearby["expiration_ts"] - _utc_now_naive()).dt.total_seconds() / 3600.0
+    nearby["pin_score"] = (
+        ((PIN_DISTANCE_PCT - nearby["distance_pct"]).clip(lower=0.0) / PIN_DISTANCE_PCT) * 52.0
+        + nearby["concentration"].clip(upper=0.50) * 76.0
+        + ((PIN_MAX_HOURS - nearby["hours_to_expiry"]).clip(lower=0.0) / PIN_MAX_HOURS) * 10.0
+    ).clip(0.0, 100.0)
+    top = nearby.sort_values("pin_score", ascending=False).iloc[0]
+    strike = _safe_float(top.get("strike"))
+    hours = max(_safe_float(top.get("hours_to_expiry")), 0.0)
+    score = _safe_float(top.get("pin_score"))
+    return {
+        "pin_score": score,
+        "pin_strike": strike,
+        "pin_expiry": str(top.get("expiry_label", "")),
+        "hours_to_expiry": hours,
+        "distance_pct": _safe_float(top.get("distance_pct")),
+        "pin_copy": f"PIN CANDIDATE: {strike:,.0f}, expires in {hours:.1f}h, score {score:.0f}/100.",
+    }
+
+
+def _risk_reversal_by_expiry(options_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for (expiry_label, expiration_ts), group in options_df.groupby(["expiry_label", "expiration_ts"], sort=False):
+        calls = group[group["option_type"] == "call"].copy()
+        puts = group[group["option_type"] == "put"].copy()
+        if calls.empty or puts.empty:
+            continue
+        call = calls.iloc[(calls["delta"] - 0.25).abs().argsort().iloc[0]]
+        put = puts.iloc[(puts["delta"] + 0.25).abs().argsort().iloc[0]]
+        call_iv = _safe_float(call.get("effective_iv"))
+        put_iv = _safe_float(put.get("effective_iv"))
+        rows.append(
+            {
+                "expiry_label": expiry_label,
+                "expiration_ts": expiration_ts,
+                "call_25d_iv": call_iv,
+                "put_25d_iv": put_iv,
+                "risk_reversal": call_iv - put_iv,
+                "call_strike": _safe_float(call.get("strike")),
+                "put_strike": _safe_float(put.get("strike")),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("expiration_ts") if rows else pd.DataFrame()
+
+
+def _iv_term_structure(atm_iv: pd.DataFrame) -> dict[str, object]:
+    if atm_iv.empty or len(atm_iv) < 2:
+        return {"front_iv": 0.0, "back_iv": 0.0, "iv_ratio": 0.0, "term_regime": "Unavailable", "term_copy": "IV term structure is unavailable."}
+    ordered = atm_iv.sort_values("expiration_ts")
+    front_iv = _safe_float(ordered["effective_iv"].iloc[0])
+    back_iv = _safe_float(ordered["effective_iv"].iloc[-1])
+    ratio = front_iv / back_iv if back_iv > 0 else 0.0
+    if ratio >= 1.08:
+        regime = "Backwardation"
+        copy = "Front IV is above back IV, which is a stress regime."
+    elif ratio <= 0.92:
+        regime = "Contango"
+        copy = "Front IV is below back IV, which is a calmer term-structure regime."
+    else:
+        regime = "Flat"
+        copy = "Front and back IV are close, so term structure is not sending a strong stress signal."
+    return {"front_iv": front_iv, "back_iv": back_iv, "iv_ratio": ratio, "term_regime": regime, "term_copy": copy}
+
+
+def _pressure_forecast(options_df: pd.DataFrame, iv_change_points: float = 0.0) -> dict[str, object]:
+    near = options_df[(options_df["hours_to_expiry"] > 0) & (options_df["hours_to_expiry"] <= 168) & (options_df["moneyness_pct"].abs() <= 5.0)].copy()
+    if near.empty:
+        return {"charm_proxy": 0.0, "vanna_proxy": 0.0, "pressure_bias": "Neutral", "pressure_copy": "Estimated charm/vanna pressure is unavailable from the current chain."}
+    hours = near["hours_to_expiry"].clip(lower=1.0)
+    charm_proxy = float((near["delta"] * near["open_interest"] * near["contract_size"] * (8.0 / hours)).sum())
+    vanna_proxy = float((near["vega"] * np.sign(near["delta"]) * iv_change_points).sum())
+    combined = vanna_proxy - charm_proxy
+    if combined > 0:
+        bias = "Upside pressure"
+    elif combined < 0:
+        bias = "Downside pressure"
+    else:
+        bias = "Neutral"
+    return {
+        "charm_proxy": charm_proxy,
+        "vanna_proxy": vanna_proxy,
+        "pressure_bias": bias,
+        "pressure_copy": f"Estimated next-8h dealer pressure: {bias}. Charm proxy {charm_proxy:+.2f}, vanna proxy {vanna_proxy:+.2f}. Treat as an estimate, not exact dealer inventory.",
+    }
+
+
+def _read_options_history() -> pd.DataFrame:
+    try:
+        if BTC_OPTIONS_HISTORY_PATH.exists():
+            return pd.read_csv(BTC_OPTIONS_HISTORY_PATH, parse_dates=["ts"])
+    except Exception:
+        return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _update_options_history(row: dict[str, object]) -> pd.DataFrame:
+    history = _read_options_history()
+    row_df = pd.DataFrame([row])
+    out = pd.concat([history, row_df], ignore_index=True) if not history.empty else row_df
+    out["ts"] = pd.to_datetime(out["ts"])
+    cutoff = _utc_now_naive() - pd.Timedelta(days=45)
+    out = out[out["ts"] >= cutoff].drop_duplicates(subset=["ts"], keep="last").sort_values("ts")
+    try:
+        BTC_OPTIONS_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(BTC_OPTIONS_HISTORY_PATH, index=False)
+    except Exception:
+        pass
+    return out
+
+
+def _history_comparison(history: pd.DataFrame, current: dict[str, object]) -> dict[str, object]:
+    if history.empty or len(history) < 4:
+        return {"history_rows": int(len(history)), "gex_vs_30d_median": 0.0, "oi_24h_delta": 0.0, "rr_zscore": 0.0, "iv_change_points": 0.0}
+    latest_ts = pd.to_datetime(current["ts"])
+    prior_24h = history[history["ts"] <= latest_ts - pd.Timedelta(hours=24)]
+    gex_median = float(history.tail(30)["total_abs_gex"].median()) if "total_abs_gex" in history else 0.0
+    oi_delta = 0.0
+    iv_change = 0.0
+    if not prior_24h.empty:
+        prior = prior_24h.iloc[-1]
+        oi_delta = _safe_float(current.get("total_oi")) - _safe_float(prior.get("total_oi"))
+        iv_change = _safe_float(current.get("front_iv")) - _safe_float(prior.get("front_iv"))
+    rr_series = history["front_rr"].dropna() if "front_rr" in history else pd.Series(dtype=float)
+    rr_z = 0.0
+    if len(rr_series) >= 5:
+        rr_std = float(rr_series.std())
+        rr_z = 0.0 if rr_std < 1e-12 else (_safe_float(current.get("front_rr")) - float(rr_series.mean())) / rr_std
+    return {
+        "history_rows": int(len(history)),
+        "gex_vs_30d_median": (_safe_float(current.get("total_abs_gex")) / gex_median - 1.0) if gex_median > 0 else 0.0,
+        "oi_24h_delta": oi_delta,
+        "rr_zscore": rr_z,
+        "iv_change_points": iv_change,
+    }
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": "false"}, timeout=20)
@@ -2406,7 +2615,7 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
         on="instrument_name",
         how="left",
     )
-    now_ms = pd.Timestamp.utcnow().value // 10**6
+    now_ms = pd.Timestamp.now(tz="UTC").value // 10**6
     max_expiry_ms = now_ms + int(pd.Timedelta(days=BTC_OPTIONS_MAX_DAYS).total_seconds() * 1000)
     merged = merged[
         (merged["expiration_timestamp"].fillna(0).astype(np.int64) >= now_ms)
@@ -2473,19 +2682,12 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     options_df["call_gex"] = np.where(options_df["option_type"] == "call", options_df["gex_abs"], 0.0)
     options_df["put_gex"] = np.where(options_df["option_type"] == "put", options_df["gex_abs"], 0.0)
     options_df["signed_gex"] = np.where(options_df["option_type"] == "call", options_df["gex_abs"], -options_df["gex_abs"])
+    now_ts = _utc_now_naive()
+    options_df["hours_to_expiry"] = (options_df["expiration_ts"] - now_ts).dt.total_seconds() / 3600.0
+    options_df["days_to_expiry"] = options_df["hours_to_expiry"] / 24.0
+    options_df["moneyness_pct"] = ((options_df["strike"] / spot) - 1.0) * 100.0
 
-    strike_map = (
-        options_df.groupby("strike", as_index=False)
-        .agg(
-            call_gex=("call_gex", "sum"),
-            put_gex=("put_gex", "sum"),
-            signed_gex=("signed_gex", "sum"),
-            abs_gex=("gex_abs", "sum"),
-            total_oi=("open_interest", "sum"),
-            avg_iv=("effective_iv", "mean"),
-        )
-        .sort_values("strike")
-    )
+    strike_map = _strike_map_for_options(options_df)
     expiry_map = (
         options_df.groupby(["expiry_label", "expiration_ts"], as_index=False)
         .agg(abs_gex=("gex_abs", "sum"), signed_gex=("signed_gex", "sum"), total_oi=("open_interest", "sum"), avg_iv=("effective_iv", "mean"))
@@ -2518,6 +2720,26 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     total_abs_gex = float(options_df["gex_abs"].sum())
     total_signed_gex = float(options_df["signed_gex"].sum())
     top5_concentration = float(options_df["gex_abs"].nlargest(5).sum() / total_abs_gex) if total_abs_gex > 0 else 0.0
+    front_24h = _front_gex_summary(options_df, spot, FRONT_DAY_HOURS, "Front 24H")
+    front_7d = _front_gex_summary(options_df, spot, FRONT_WEEK_DAYS * 24, "Front 7D")
+    pin = _pin_candidate(options_df, spot)
+    risk_reversal = _risk_reversal_by_expiry(options_df)
+    iv_term = _iv_term_structure(atm_iv)
+    front_rr = _safe_float(risk_reversal["risk_reversal"].iloc[0]) if not risk_reversal.empty else 0.0
+    history_row = {
+        "ts": now_ts,
+        "spot": spot,
+        "total_abs_gex": total_abs_gex,
+        "total_signed_gex": total_signed_gex,
+        "front_24h_abs_gex": front_24h["abs_gex"],
+        "front_7d_abs_gex": front_7d["abs_gex"],
+        "front_rr": front_rr,
+        "front_iv": iv_term["front_iv"],
+        "total_oi": float(options_df["open_interest"].sum()),
+    }
+    history = _update_options_history(history_row)
+    history_comparison = _history_comparison(history, history_row)
+    pressure_forecast = _pressure_forecast(options_df, _safe_float(history_comparison.get("iv_change_points")))
 
     klines = _fetch_binance_btc_perp_klines()
     oi_hist = _fetch_binance_btc_open_interest_hist()
@@ -2541,6 +2763,14 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
         "call_gex": float(options_df["call_gex"].sum()),
         "put_gex": float(options_df["put_gex"].sum()),
         "top5_concentration": top5_concentration,
+        "front_24h": front_24h,
+        "front_7d": front_7d,
+        "pin": pin,
+        "risk_reversal": risk_reversal,
+        "iv_term": iv_term,
+        "pressure_forecast": pressure_forecast,
+        "history": history,
+        "history_comparison": history_comparison,
         "perp_snapshot": perp_snapshot,
         "ibit_context": ibit_context,
         "anchor_ts": anchor_ts,
@@ -2610,6 +2840,31 @@ def _build_iv_curve_chart(atm_iv: pd.DataFrame) -> go.Figure:
         margin=dict(l=30, r=20, t=60, b=30),
         xaxis_title="Expiry",
         yaxis_title="ATM IV",
+    )
+    fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_risk_reversal_chart(risk_reversal: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if not risk_reversal.empty:
+        fig.add_scatter(
+            x=risk_reversal["expiry_label"],
+            y=risk_reversal["risk_reversal"],
+            mode="lines+markers",
+            line=dict(color="#f4d35e"),
+            name="25D Call IV - Put IV",
+        )
+        fig.add_hline(y=0.0, line_dash="dot", line_color="#8f9a8b")
+    fig.update_layout(
+        title="25D Risk Reversal by Expiry",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=60, b=30),
+        xaxis_title="Expiry",
+        yaxis_title="RR (IV pts)",
     )
     fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
     fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
@@ -2843,6 +3098,29 @@ def _jarvis_dealer_hedging_section(
             <li><strong>Regime switch:</strong> {escape(flip_line)}</li>
             <li><strong>Downside trigger:</strong> {escape(downside_line)}</li>
             <li><strong>Upside hedge zone:</strong> {escape(upside_line)}</li>
+        </ul>
+    """
+
+
+def _jarvis_options_pressure_section(bundle: dict[str, object]) -> str:
+    front_24h = bundle.get("front_24h", {})
+    front_7d = bundle.get("front_7d", {})
+    pin = bundle.get("pin", {})
+    iv_term = bundle.get("iv_term", {})
+    risk_reversal = bundle.get("risk_reversal", pd.DataFrame())
+    pressure = bundle.get("pressure_forecast", {})
+    history = bundle.get("history_comparison", {})
+    front_rr = _safe_float(risk_reversal["risk_reversal"].iloc[0]) if isinstance(risk_reversal, pd.DataFrame) and not risk_reversal.empty else 0.0
+    return f"""
+        <h4>Front-Week Options Pressure</h4>
+        <ul>
+            <li><strong>Front 24H GEX:</strong> {_format_gex_billions(_safe_float(front_24h.get("abs_gex")))} absolute, {_format_gex_billions(_safe_float(front_24h.get("signed_gex")), signed=True)} signed. Top strike { _safe_float(front_24h.get("top_strike")):,.0f} ({_safe_float(front_24h.get("top_distance_pct")):+.2f}% from spot).</li>
+            <li><strong>Front 7D GEX:</strong> {_format_gex_billions(_safe_float(front_7d.get("abs_gex")))} absolute, {_format_gex_billions(_safe_float(front_7d.get("signed_gex")), signed=True)} signed. Use this before the full 120-day chain for today's dealer-pressure read.</li>
+            <li><strong>Pin:</strong> {escape(str(pin.get("pin_copy", "No pin candidate is visible.")))}</li>
+            <li><strong>Risk reversal:</strong> Front 25D call IV minus put IV is {front_rr:+.2f}; RR z-score is {_safe_float(history.get("rr_zscore")):+.2f} while history builds.</li>
+            <li><strong>IV term:</strong> {escape(str(iv_term.get("term_regime", "Unavailable")))} at {_safe_float(iv_term.get("iv_ratio")):.2f}x front/back IV. {escape(str(iv_term.get("term_copy", "")))}</li>
+            <li><strong>Estimated charm/vanna:</strong> {escape(str(pressure.get("pressure_copy", "Unavailable.")))}</li>
+            <li><strong>Historical context:</strong> Current GEX is {_safe_float(history.get("gex_vs_30d_median")):+.1%} vs the rolling history median; 24H OI delta is {_safe_float(history.get("oi_24h_delta")):+,.0f} contracts.</li>
         </ul>
     """
 
@@ -3082,6 +3360,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         support_levels,
         resistance_levels,
     )
+    options_pressure_section = _jarvis_options_pressure_section(bundle)
 
     return f"""
         <h4>Big Picture</h4>
@@ -3096,6 +3375,8 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         <p>{escape(support_text)} {escape(resistance_text)}</p>
 
         {dealer_hedging_section}
+
+        {options_pressure_section}
 
         <h4>Intraday Read</h4>
         <ul>
@@ -3170,6 +3451,13 @@ def _render_btc_options_cockpit(anchor_mode: str):
     support_levels = bundle["support_levels"]
     resistance_levels = bundle["resistance_levels"]
     ibit = bundle["ibit_context"]
+    front_24h = bundle["front_24h"]
+    front_7d = bundle["front_7d"]
+    pin = bundle["pin"]
+    iv_term = bundle["iv_term"]
+    risk_reversal = bundle["risk_reversal"]
+    pressure_forecast = bundle["pressure_forecast"]
+    history_comparison = bundle["history_comparison"]
 
     st.title("BTC Options Screener")
     st.caption(
@@ -3208,6 +3496,20 @@ def _render_btc_options_cockpit(anchor_mode: str):
     c5.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}")
     c6.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}")
 
+    f1, f2, f3, f4, f5, f6 = st.columns(6)
+    f1.metric("Front 24H GEX", _format_gex_billions(float(front_24h["abs_gex"])))
+    f2.metric("Front 7D GEX", _format_gex_billions(float(front_7d["abs_gex"])))
+    f3.metric("Pin Score", f"{_safe_float(pin.get('pin_score')):.0f}/100")
+    f4.metric("IV Term", str(iv_term.get("term_regime", "n/a")), f"{_safe_float(iv_term.get('iv_ratio')):.2f}x")
+    f5.metric("Front RR", f"{_safe_float(risk_reversal['risk_reversal'].iloc[0]):+.2f}" if not risk_reversal.empty else "n/a")
+    f6.metric("Pressure Est.", str(pressure_forecast.get("pressure_bias", "Neutral")))
+
+    st.caption(
+        f"{str(pin.get('pin_copy', 'No pin candidate.'))} "
+        f"{str(iv_term.get('term_copy', ''))} "
+        f"{str(pressure_forecast.get('pressure_copy', ''))}"
+    )
+
     s1, s2 = st.columns(2)
     with s1:
         st.markdown("### Potential GEX Support")
@@ -3245,6 +3547,25 @@ def _render_btc_options_cockpit(anchor_mode: str):
         )
         st.markdown("### Options / Perp Snapshot")
         _render_options_snapshot_table(summary_rows)
+
+    rr_col, hist_col = st.columns(2)
+    with rr_col:
+        st.plotly_chart(_build_risk_reversal_chart(risk_reversal), use_container_width=True)
+    with hist_col:
+        front_rows = pd.DataFrame(
+            [
+                {"Metric": "Front 24H Signed GEX", "Value": _format_gex_billions(float(front_24h["signed_gex"]), signed=True)},
+                {"Metric": "Front 24H Top Strike", "Value": f"{_safe_float(front_24h.get('top_strike')):,.0f} ({_safe_float(front_24h.get('top_distance_pct')):+.2f}%)"},
+                {"Metric": "Front 7D Signed GEX", "Value": _format_gex_billions(float(front_7d["signed_gex"]), signed=True)},
+                {"Metric": "Front 7D Top Strike", "Value": f"{_safe_float(front_7d.get('top_strike')):,.0f} ({_safe_float(front_7d.get('top_distance_pct')):+.2f}%)"},
+                {"Metric": "GEX vs History", "Value": f"{_safe_float(history_comparison.get('gex_vs_30d_median')):+.1%} vs rolling median"},
+                {"Metric": "OI 24H Delta", "Value": f"{_safe_float(history_comparison.get('oi_24h_delta')):+,.0f} contracts"},
+                {"Metric": "Front RR Z", "Value": f"{_safe_float(history_comparison.get('rr_zscore')):+.2f}"},
+                {"Metric": "History Rows", "Value": f"{int(history_comparison.get('history_rows', 0)):,} snapshots"},
+            ]
+        )
+        st.markdown("### Front-Week / History")
+        _render_options_snapshot_table(front_rows)
 
     st.plotly_chart(_build_avwap_chart(avwap_df, bundle["anchor_ts"]), use_container_width=True)
 
