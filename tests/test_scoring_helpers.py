@@ -291,10 +291,14 @@ class ScoringHelperTests(unittest.TestCase):
         self.assertGreater(summary["cvd_delta"], 0.0)
 
     def test_block_flow_gamma_map_signs_customer_direction(self):
-        original_path = scanner.BTC_OPTIONS_BLOCK_DB_PATH
+        # Patch the constant in the module namespace that actually reads it
+        # at call time (post-split, scanner.py is only a re-export shim).
+        from perpscanner import data_deribit
+
+        original_path = data_deribit.BTC_OPTIONS_BLOCK_DB_PATH
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
-                scanner.BTC_OPTIONS_BLOCK_DB_PATH = Path(tmpdir) / "blocks.sqlite"
+                data_deribit.BTC_OPTIONS_BLOCK_DB_PATH = Path(tmpdir) / "blocks.sqlite"
                 now_ms = int(scanner._utc_now_naive().timestamp() * 1000)
                 scanner._store_deribit_block_trades(
                     [
@@ -356,7 +360,7 @@ class ScoringHelperTests(unittest.TestCase):
                 self.assertEqual(flow["matched_legs"], 2)
                 self.assertEqual(flow["rfq_trades"], 1)
         finally:
-            scanner.BTC_OPTIONS_BLOCK_DB_PATH = original_path
+            data_deribit.BTC_OPTIONS_BLOCK_DB_PATH = original_path
 
 
 class ClosedBarTests(unittest.TestCase):
@@ -410,12 +414,15 @@ class ClosedBarTests(unittest.TestCase):
         # In-progress candle: opened in the past, closes in the future.
         rows.append([now_ms, "1.0", "1.2", "0.9", "1.1", "3.0", now_ms + bar_ms - 1, "30.0", 9, "2.0", "15.0", "0"])
 
-        original_get_json = scanner._get_json
-        scanner._get_json = lambda path, params=None, timeout=scanner.API_TIMEOUT: rows
+        # Patch in the consumer module: data_binance binds _get_json at import.
+        from perpscanner import data_binance
+
+        original_get_json = data_binance._get_json
+        data_binance._get_json = lambda path, params=None, timeout=scanner.API_TIMEOUT: rows
         try:
             df = scanner._fetch_klines_interval("TESTUSDT", "1h", 240)
         finally:
-            scanner._get_json = original_get_json
+            data_binance._get_json = original_get_json
 
         self.assertIsNotNone(df)
         self.assertEqual(len(df), 60)
