@@ -112,20 +112,76 @@ Then open:
 http://localhost:8501
 ```
 
+## Architecture
+
+The implementation lives in the `perpscanner/` package (config, net,
+indicators, data layers, LTF/HTF features, options analytics, scoring,
+research, UI). `scanner.py` is a thin entry shim that re-exports every
+name, so `streamlit run scanner.py` and `import scanner` both keep
+working.
+
+Signal hygiene notes:
+
+- All signals are computed on **closed bars only** - the in-progress
+  candle from every venue is dropped before any z-score or trigger.
+- Ignition triggers use **hard vetoes** (VWAP side + break-and-hold)
+  plus a weighted confluence of expansion / volume / OI / taker / basis
+  confirmations, instead of a 7-way AND.
+- Trigger gates are **regime-conditional**: volume/OI z and ATR ROC
+  thresholds scale with the BTC daily regime.
+
+## Research Loop
+
+Every scored scan is logged to `data/research_snapshots.sqlite`
+(throttled, exception-proof). Forward returns are joined from later
+snapshots of the same store - no lookahead - and turned into:
+
+- **Rank IC**: per-factor Spearman IC vs 1h/4h/24h forward returns with
+  t-stats, so each score has to prove it ranks future winners.
+- **Trigger event study**: direction-adjusted returns after fresh
+  ignition triggers, in excess of the same-scan cross-section.
+
+View it on the app's *Research / Signal Quality* page, or run:
+
+```bash
+py -m perpscanner.research
+```
+
+Leave the app running on the Altcoins page so snapshots accumulate; a
+day of uptime gives a few hundred cross-sections.
+
+## Websocket LTF Feed
+
+An optional websocket feed streams closed 5m/15m/1h bars instead of
+re-polling REST every scan (sidebar toggle, default off). It seeds from
+one REST fetch, serves frames in the same schema, and silently falls
+back to REST whenever a buffer is cold or stale. Note: some networks
+never receive `fstream.binance.com` frames even though REST works -
+enable it where fstream actually delivers (e.g. a VPS).
+
+## Tests
+
+```bash
+py -m unittest discover tests
+```
+
+Run from the repo root (the tests import the `perpscanner` package via
+the `scanner` shim).
+
 ## Notes
 
 This is a market scanner, not a trading system. The values are derived from
 public exchange data and may be delayed, temporarily unavailable, or affected by
 Binance API limits.
 
-The scanner currently covers Binance USDT-M perpetual futures only. It does not
-scan spot pairs, options, other exchanges, on-chain data, order books, or news.
+The scanner currently covers Binance USDT-M perpetual futures only (plus
+Deribit BTC options, multi-venue BTC spot volume, and US BTC ETF context
+on the Bitcoin pages).
 
 ## Possible Next Improvements
 
 - Add alert rules for setup-score changes and new entrants into the top ranks
+- Recalibrate score weights once the research store has a few weeks of data
 - Add CSV export and saved watchlists
-- Add taker buy/sell imbalance and order-book spread filters
-- Add spot and multi-exchange support
-- Add tests around metric calculations and API parsing
+- Extend the websocket feed to spot klines (basis confirmation currently REST-polls)
 - Add deployment config for Streamlit Community Cloud, Docker, or a VPS

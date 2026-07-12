@@ -614,5 +614,94 @@ class ResearchLoopTests(unittest.TestCase):
             tmpdir.cleanup()
 
 
+class WSFeedTests(unittest.TestCase):
+    def _closed_kline(self, symbol="AAAUSDT", interval="5m", open_ms=1_700_000_000_000, close_price=101.0, closed=True):
+        return {
+            "data": {
+                "e": "kline",
+                "k": {
+                    "t": open_ms,
+                    "s": symbol,
+                    "i": interval,
+                    "o": "100.0",
+                    "h": "102.0",
+                    "l": "99.0",
+                    "c": str(close_price),
+                    "v": "10.0",
+                    "q": "1000.0",
+                    "n": 25,
+                    "Q": "600.0",
+                    "x": closed,
+                },
+            }
+        }
+
+    def test_open_bar_is_ignored_closed_bar_lands(self):
+        feed = scanner.WSKlineFeed(["AAAUSDT"], ["5m"])
+
+        self.assertFalse(feed.handle_kline_payload(self._closed_kline(closed=False)))
+        self.assertTrue(feed.handle_kline_payload(self._closed_kline(closed=True)))
+        # duplicate close event (reconnect) replaces, not appends
+        self.assertTrue(feed.handle_kline_payload(self._closed_kline(closed=True, close_price=101.5)))
+        with feed._lock:
+            buf = list(feed._buffers[("AAAUSDT", "5m")])
+        self.assertEqual(len(buf), 1)
+        self.assertEqual(buf[0]["close"], 101.5)
+
+    def test_frame_requires_seed_depth_and_freshness(self):
+        feed = scanner.WSKlineFeed(["AAAUSDT"], ["5m"])
+        # One ws bar alone is far below EMA_SLOW + 5 -> unusable
+        feed.handle_kline_payload(self._closed_kline())
+        self.assertIsNone(feed.frame("AAAUSDT", "5m"))
+
+        # Seed with a fresh REST-style frame -> usable, ws bar merged on top
+        now = scanner._utc_now_naive().floor("5min")
+        idx = pd.date_range(end=now - pd.Timedelta(minutes=5), periods=70, freq="5min")
+        seed_df = pd.DataFrame(
+            {
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "vol": 10.0,
+                "quote_vol": 1000.0,
+                "trades": 20.0,
+                "tb_quote": 500.0,
+            },
+            index=idx,
+        )
+        feed.seed("AAAUSDT", "5m", seed_df)
+        recent_open_ms = int(now.value // 10**6) - 5 * 60 * 1000
+        feed.handle_kline_payload(self._closed_kline(open_ms=recent_open_ms, close_price=105.0))
+
+        frame = feed.frame("AAAUSDT", "5m")
+
+        self.assertIsNotNone(frame)
+        self.assertListEqual(list(frame.columns), ["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"])
+        self.assertEqual(float(frame["close"].iloc[-1]), 105.0)
+        self.assertGreaterEqual(len(frame), 70)
+
+    def test_frame_goes_stale_without_new_bars(self):
+        feed = scanner.WSKlineFeed(["AAAUSDT"], ["5m"])
+        stale_end = scanner._utc_now_naive() - pd.Timedelta(hours=3)
+        idx = pd.date_range(end=stale_end, periods=70, freq="5min")
+        seed_df = pd.DataFrame(
+            {
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "vol": 10.0,
+                "quote_vol": 1000.0,
+                "trades": 20.0,
+                "tb_quote": 500.0,
+            },
+            index=idx,
+        )
+        feed.seed("AAAUSDT", "5m", seed_df)
+
+        self.assertIsNone(feed.frame("AAAUSDT", "5m"))
+
+
 if __name__ == "__main__":
     unittest.main()

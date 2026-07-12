@@ -243,6 +243,10 @@ from perpscanner.research import (  # noqa: F401
     snapshot_counts,
     trigger_event_study,
 )
+from perpscanner.ws_feed import (  # noqa: F401
+    WSKlineFeed,
+    get_shared_feed,
+)
 from perpscanner.ui_styles import (  # noqa: F401
     _inject_app_styles,
 )

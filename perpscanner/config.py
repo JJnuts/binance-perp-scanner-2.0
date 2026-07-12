@@ -67,6 +67,18 @@ OI_LOOKBACK = 3
 OI_PERIOD = "1h"
 FUNDING_LIMIT = 30
 MAX_WORKERS = 20
+# Websocket LTF feed: closed 5m/15m/1h bars stream in instead of being
+# re-polled over REST every LTF_CACHE_TTL, which risks request-weight
+# bans at ~100 symbols x 3 intervals.
+# Default OFF: verified 2026-07-13 that fstream.binance.com websocket
+# frames never arrive on this network (handshake OK, zero data; spot ws
+# and futures REST both fine). Flip on via the sidebar toggle when
+# running somewhere fstream actually delivers - the feed degrades to
+# REST automatically either way.
+WS_LTF_ENABLED = False
+WS_BASE = "wss://fstream.binance.com/stream"
+WS_MAX_SYMBOLS = 150
+WS_STREAMS_PER_CONNECTION = 180
 REFRESH_MS = 60 * 1000
 CACHE_TTL = 280
 API_TIMEOUT = 15

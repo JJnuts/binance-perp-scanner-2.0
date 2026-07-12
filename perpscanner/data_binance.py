@@ -24,9 +24,11 @@ from .config import (
     MAX_WORKERS,
     OI_LOOKBACK,
     OI_PERIOD,
+    WS_LTF_ENABLED,
 )
 from .net import _get_json, _get_json_url
 from .utils import _drop_unclosed_by_close_ts, _safe_float
+from .ws_feed import WSKlineFeed, get_shared_feed
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -191,12 +193,22 @@ def fetch_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, objec
                     "funding_trend": funding_trend,
                 }
     return out
-def _fetch_ltf_symbol_context(symbol: str) -> tuple[str, dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+def _fetch_ltf_symbol_context(
+    symbol: str,
+    feed: Optional[WSKlineFeed] = None,
+) -> tuple[str, dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     klines: dict[str, pd.DataFrame] = {}
     oi_hist: dict[str, pd.DataFrame] = {}
     for interval in LTF_INTERVALS:
         try:
-            df = _fetch_klines_interval(symbol, interval, LTF_KLINE_LIMITS[interval])
+            df = feed.frame(symbol, interval) if feed is not None else None
+            if df is None:
+                # REST fallback (also the cold-start path); hand the result
+                # to the feed as its baseline so ws bars stack on top and
+                # the next scan is served without a REST call.
+                df = _fetch_klines_interval(symbol, interval, LTF_KLINE_LIMITS[interval])
+                if feed is not None and df is not None:
+                    feed.seed(symbol, interval, df)
             if df is not None and not df.empty:
                 klines[interval] = df
         except Exception:
@@ -234,10 +246,11 @@ def fetch_htf_daily_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, ob
                 out[symbol] = {"daily": daily, "daily_oi": daily_oi, "spot_daily": spot_daily}
     return out
 @st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
-def fetch_ltf_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
+def fetch_ltf_symbol_contexts(symbols: tuple[str, ...], use_ws: bool = WS_LTF_ENABLED) -> dict[str, dict[str, object]]:
+    feed = get_shared_feed(symbols, LTF_INTERVALS) if use_ws else None
     out: dict[str, dict[str, object]] = {}
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(_fetch_ltf_symbol_context, symbol): symbol for symbol in symbols}
+        futures = {ex.submit(_fetch_ltf_symbol_context, symbol, feed): symbol for symbol in symbols}
         for fut in as_completed(futures):
             symbol, klines, oi_hist = fut.result()
             if klines:

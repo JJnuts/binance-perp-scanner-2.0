@@ -31,6 +31,7 @@ from .config import (
     VWAP_FAST,
     VWAP_HTF,
     VWAP_SLOW,
+    WS_LTF_ENABLED,
 )
 from .indicators import (
     _aligned_return_frame,
@@ -445,11 +446,12 @@ def build_ltf_regime_metrics(
     min_quote_volume: float,
     min_trades: float,
     min_oi_value: float,
+    use_ws: bool = WS_LTF_ENABLED,
 ) -> pd.DataFrame:
     ticker_stats = fetch_ticker_stats()
     candidates = _candidate_symbols(symbols, ticker_stats, min_quote_volume, min_trades)
     context_symbols = tuple(sorted(set(candidates + (ETH_SYMBOL,))))
-    contexts = fetch_ltf_symbol_contexts(context_symbols)
+    contexts = fetch_ltf_symbol_contexts(context_symbols, use_ws)
     spot_contexts = fetch_ltf_spot_contexts(candidates)
     btc_context = contexts.get(BTC_SYMBOL)
     eth_context = contexts.get(ETH_SYMBOL)

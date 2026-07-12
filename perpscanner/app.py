@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-from .config import REFRESH_MS
+from .config import REFRESH_MS, WS_LTF_ENABLED
 from .data_binance import get_usdt_perpetuals
 from .research import log_scan_snapshot
 from .scoring import build_ltf_regime_metrics, build_metrics
@@ -156,6 +156,17 @@ def main():
             )
 
             st.divider()
+            use_ws_feed = st.toggle(
+                "Websocket LTF feed",
+                value=WS_LTF_ENABLED,
+                help=(
+                    "Stream closed 5m/15m/1h bars over websocket instead of re-polling "
+                    "REST every scan. Falls back to REST automatically when a buffer is "
+                    "cold or stale. Off by default: some networks (including the one this "
+                    "was built on) never receive fstream.binance.com frames even though "
+                    "REST works - enable it on a VPS/network where fstream delivers."
+                ),
+            )
             st.caption("Universe excludes BTCUSDT by design.")
             st.caption("Data: Binance Futures public market data endpoints.")
 
@@ -207,7 +218,7 @@ def main():
     ltf_df = pd.DataFrame()
     if altcoin_screener_mode in {"LTF Scalping", "Best Setups"}:
         progress_msg.info("Building accurate native LTF ATR ignition model - this fetches 5m, 15m, and 1h data...")
-        ltf_df = build_ltf_regime_metrics(symbols, min_quote_volume, min_trades, min_oi_value)
+        ltf_df = build_ltf_regime_metrics(symbols, min_quote_volume, min_trades, min_oi_value, use_ws=use_ws_feed)
     progress_msg.empty()
 
     # Research loop: persist the scored scan so forward returns can be
