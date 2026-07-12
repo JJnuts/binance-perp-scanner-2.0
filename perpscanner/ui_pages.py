@@ -6,10 +6,11 @@ import streamlit as st
 from html import escape
 from datetime import datetime
 
-from .config import BTC_BUBBLE_TIMEFRAMES, TERM_GUIDE_GROUPS
+from .config import BTC_BUBBLE_TIMEFRAMES, RESEARCH_DB_PATH, TERM_GUIDE_GROUPS
 from .utils import _format_gex_billions, _format_human_count, _safe_float
 from .data_spot import _spot_flow_summary, build_bitcoin_bubble_data
 from .options_analytics import build_btc_options_cockpit
+from .research import rank_ic_report, snapshot_counts, trigger_event_study
 from .scoring import _build_best_setups
 from .ui_charts import (
     _build_avwap_chart,
@@ -363,6 +364,68 @@ def _render_term_guide():
             f'<details class="term-guide-section"{open_attr}><summary class="term-guide-summary">{group_name}</summary><div class="term-guide-section-body"><div class="term-guide-grid">{"".join(cards)}</div></div></details>'
         )
     st.markdown("".join(sections), unsafe_allow_html=True)
+def _render_research_dashboard():
+    st.subheader("Research / Signal Quality")
+    st.caption(
+        "Every scan is logged locally so the scores can be judged against forward returns. "
+        "Rank IC answers whether a high score actually ranked future winners; the event study "
+        "answers whether fresh ignition triggers beat the cross-section."
+    )
+    counts = snapshot_counts()
+    col_a, col_b = st.columns(2)
+    for col, (table, info) in zip((col_a, col_b), counts.items()):
+        with col:
+            st.metric(table.replace("_", " ").title(), f"{info['rows']:,} rows")
+            st.caption(f"{info['cross_sections']:,} cross-sections | {info['first']} .. {info['last']}")
+
+    st.divider()
+    st.markdown("**Rank IC** (Spearman, factor score vs forward return; positive = the score ranks winners)")
+    ic = rank_ic_report()
+    if ic.empty:
+        st.info(
+            "No measurable data yet. Leave the app running on the Altcoins page so snapshots "
+            "accumulate - a day of uptime gives a few hundred cross-sections."
+        )
+    else:
+        st.dataframe(
+            ic,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "factor": st.column_config.TextColumn("Factor"),
+                "horizon_h": st.column_config.NumberColumn("Horizon (h)", format="%.0f"),
+                "mean_ic": st.column_config.NumberColumn("Mean IC", format="%.4f"),
+                "ic_std": st.column_config.NumberColumn("IC Std", format="%.4f"),
+                "t_stat": st.column_config.NumberColumn("t-stat", format="%.2f"),
+                "cross_sections": st.column_config.NumberColumn("N", format="%d"),
+            },
+        )
+        st.caption(
+            "Rule of thumb: |t| >= 2 with a consistent sign is evidence; anything else is noise. "
+            "A negative IC on a score you rank by means the score is actively hurting."
+        )
+
+    st.divider()
+    st.markdown("**Ignition trigger event study** (direction-adjusted, excess vs same-scan cross-section)")
+    ev = trigger_event_study()
+    if ev.empty:
+        st.info("No fresh triggers with forward snapshots yet.")
+    else:
+        st.dataframe(
+            ev,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "horizon_h": st.column_config.NumberColumn("Horizon (h)", format="%.0f"),
+                "triggers": st.column_config.NumberColumn("Triggers", format="%d"),
+                "mean_signed_ret": st.column_config.NumberColumn("Mean Ret", format="%.4f"),
+                "median_signed_ret": st.column_config.NumberColumn("Median Ret", format="%.4f"),
+                "hit_rate": st.column_config.NumberColumn("Hit Rate", format="%.2f"),
+                "mean_excess_ret": st.column_config.NumberColumn("Excess Ret", format="%.4f"),
+                "excess_hit_rate": st.column_config.NumberColumn("Excess Hit", format="%.2f"),
+            },
+        )
+    st.caption(f"Store: {RESEARCH_DB_PATH}. CLI report: `py -m perpscanner.research` from the repo root.")
 def _set_page(page_name: str):
     st.session_state["app_page"] = page_name
 def _render_glossary_jump():

@@ -220,6 +220,7 @@ def _ltf_interval_metrics(
     return {
         "symbol": symbol,
         "timeframe": interval,
+        "price": price,
         "ignition_state": ignition_state,
         "ignition_score": float(np.clip(ignition_score, 0.0, 100.0)),
         "long_ignition_score": float(np.clip(long_score, 0.0, 100.0)),

@@ -6,6 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 
 from .config import REFRESH_MS
 from .data_binance import get_usdt_perpetuals
+from .research import log_scan_snapshot
 from .scoring import build_ltf_regime_metrics, build_metrics
 from .ui_styles import _inject_app_styles
 from .ui_pages import (
@@ -14,6 +15,7 @@ from .ui_pages import (
     _render_btc_options_cockpit,
     _render_htf_momentum_dashboard,
     _render_ltf_scalping_dashboard,
+    _render_research_dashboard,
     _render_term_guide,
 )
 
@@ -54,6 +56,10 @@ def main():
             st.session_state["app_page"] = "Glossary / Term Guide"
             st.rerun()
 
+        if st.button("🔬 Research / Signal Quality", use_container_width=True):
+            st.session_state["app_page"] = "Research"
+            st.rerun()
+
         st.divider()
 
         with st.expander("Altcoins", expanded=page == "Altcoins"):
@@ -81,6 +87,9 @@ def main():
         if page == "Glossary / Term Guide":
             st.divider()
             st.caption("Reference page for all screener terms and score labels.")
+        elif page == "Research":
+            st.divider()
+            st.caption("Signal-quality report built from logged scan snapshots.")
         elif page == "BTC Options Screener":
             st.subheader("BTC Options")
             options_anchor_mode = st.radio(
@@ -155,6 +164,11 @@ def main():
         _render_term_guide()
         return
 
+    if page == "Research":
+        st.title("Binance Perp Scanner 2.0")
+        _render_research_dashboard()
+        return
+
     if page == "BTC Options Screener":
         _render_btc_options_cockpit(options_anchor_mode)
         return
@@ -195,6 +209,10 @@ def main():
         progress_msg.info("Building accurate native LTF ATR ignition model - this fetches 5m, 15m, and 1h data...")
         ltf_df = build_ltf_regime_metrics(symbols, min_quote_volume, min_trades, min_oi_value)
     progress_msg.empty()
+
+    # Research loop: persist the scored scan so forward returns can be
+    # measured later (rank IC / trigger event study). Never breaks the app.
+    log_scan_snapshot(df, ltf_df)
 
     if altcoin_screener_mode == "LTF Scalping":
         _render_ltf_scalping_dashboard(

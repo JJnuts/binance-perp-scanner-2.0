@@ -82,6 +82,46 @@ BTC_OPTIONS_KLINE_LIMIT = 576
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BTC_OPTIONS_HISTORY_PATH = REPO_ROOT / "data" / "btc_options_history.csv"
 BTC_OPTIONS_BLOCK_DB_PATH = REPO_ROOT / "data" / "deribit_block_trades.sqlite"
+# Research loop: every scored scan snapshot is appended here so the
+# scores can be validated against forward returns (rank IC, trigger
+# event studies) instead of staying vibe-calibrated.
+RESEARCH_DB_PATH = REPO_ROOT / "data" / "research_snapshots.sqlite"
+RESEARCH_LOG_MIN_INTERVAL_S = 240
+RESEARCH_HORIZONS_HOURS = (1.0, 4.0, 24.0)
+RESEARCH_MIN_GROUP_SIZE = 10
+RESEARCH_FACTOR_COLUMNS = [
+    "alpha_score",
+    "htf_alpha_score",
+    "vol_adjusted_score",
+    "relative_strength_score",
+    "htf_relative_strength_score",
+    "volume_score",
+    "trend_score",
+    "htf_trend_score",
+    "oi_score",
+    "funding_quality_score",
+    "funding_trend_quality_score",
+    "momentum_score",
+    "htf_momentum_score",
+    "setup_score",
+    "htf_setup_score",
+    "overextension_score",
+    "htf_expansion_score",
+]
+RESEARCH_LTF_COLUMNS = [
+    "ignition_tf",
+    "ignition_state",
+    "trigger_direction",
+    "trigger_fresh",
+    "bars_since_trigger",
+    "ltf_ignition_score",
+    "confluence_long",
+    "confluence_short",
+    "volume_zscore",
+    "oi_zscore",
+    "taker_imbalance",
+    "regime",
+]
 FRONT_DAY_HOURS = 24
 FRONT_WEEK_DAYS = 7
 PIN_MAX_HOURS = 24

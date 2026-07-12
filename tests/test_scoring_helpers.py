@@ -494,5 +494,125 @@ class ClosedBarTests(unittest.TestCase):
         self.assertEqual(float(df["quote_vol"].iloc[-1]), 100.0)
 
 
+class ResearchLoopTests(unittest.TestCase):
+    def _with_temp_db(self):
+        from perpscanner import research
+
+        tmpdir = tempfile.TemporaryDirectory()
+        original = research.RESEARCH_DB_PATH
+        research.RESEARCH_DB_PATH = Path(tmpdir.name) / "research.sqlite"
+        return research, original, tmpdir
+
+    def test_forward_return_frame_uses_later_snapshot(self):
+        from perpscanner import research
+
+        t0 = pd.Timestamp("2026-01-01 00:00:00")
+        t1 = t0 + pd.Timedelta(hours=1)
+        prices = pd.DataFrame(
+            {
+                "scan_ts": [t0, t0, t1, t1],
+                "symbol": ["AAA", "BBB", "AAA", "BBB"],
+                "price": [100.0, 100.0, 110.0, 90.0],
+            }
+        )
+
+        fwd = research._forward_return_frame(prices, 1.0)
+        fwd_t0 = fwd[fwd["scan_ts"] == t0].set_index("symbol")["fwd_ret"]
+
+        self.assertAlmostEqual(fwd_t0["AAA"], 0.10)
+        self.assertAlmostEqual(fwd_t0["BBB"], -0.10)
+        # t1 snapshots have no later exit inside tolerance -> NaN
+        self.assertTrue(fwd[fwd["scan_ts"] == t1]["fwd_ret"].isna().all())
+
+    def test_log_scan_snapshot_throttles_and_survives_bad_input(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            df = pd.DataFrame({"symbol": ["AAA"], "price": [1.0], "momentum_score": [50.0]})
+
+            first = research.log_scan_snapshot(df, None)
+            second = research.log_scan_snapshot(df, None)
+
+            self.assertEqual(first[research.METRIC_TABLE], 1)
+            self.assertEqual(second[research.METRIC_TABLE], 0)  # throttled
+            # Must never raise, whatever it is fed.
+            research.log_scan_snapshot(None, pd.DataFrame())
+            counts = research.snapshot_counts()
+            self.assertEqual(counts[research.METRIC_TABLE]["rows"], 1)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def _seed_synthetic_store(self, research):
+        conn = research._connect()
+        try:
+            t0 = pd.Timestamp("2026-01-01 00:00:00")
+            t1 = t0 + pd.Timedelta(hours=1)
+            symbols = [f"S{i:02d}USDT" for i in range(12)]
+            rows = []
+            for i, sym in enumerate(symbols):
+                rows.append({"scan_ts": t0.isoformat(), "symbol": sym, "price": 100.0, "momentum_score": float(i)})
+                rows.append(
+                    {"scan_ts": t1.isoformat(), "symbol": sym, "price": 100.0 * (1.0 + i / 100.0), "momentum_score": float(i)}
+                )
+            pd.DataFrame(rows).to_sql(research.METRIC_TABLE, conn, if_exists="append", index=False)
+            ltf_rows = []
+            for i, sym in enumerate(symbols):
+                ltf_rows.append(
+                    {
+                        "scan_ts": t0.isoformat(),
+                        "symbol": sym,
+                        "price": 100.0,
+                        "trigger_fresh": 1 if i == 11 else 0,
+                        "trigger_direction": "Long" if i == 11 else "None",
+                        "ltf_ignition_score": float(i),
+                    }
+                )
+                ltf_rows.append(
+                    {
+                        "scan_ts": t1.isoformat(),
+                        "symbol": sym,
+                        "price": 100.0 * (1.0 + i / 100.0),
+                        "trigger_fresh": 0,
+                        "trigger_direction": "None",
+                        "ltf_ignition_score": float(i),
+                    }
+                )
+            pd.DataFrame(ltf_rows).to_sql(research.LTF_TABLE, conn, if_exists="append", index=False)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_rank_ic_detects_perfectly_predictive_factor(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            self._seed_synthetic_store(research)
+            ic = research.rank_ic_report(horizons=(1.0,))
+
+            self.assertFalse(ic.empty)
+            row = ic[ic["factor"] == "momentum_score"].iloc[0]
+            self.assertAlmostEqual(row["mean_ic"], 1.0, places=6)
+            self.assertEqual(row["cross_sections"], 1)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def test_trigger_event_study_rewards_winning_long_trigger(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            self._seed_synthetic_store(research)
+            ev = research.trigger_event_study(horizons=(1.0,))
+
+            self.assertFalse(ev.empty)
+            row = ev.iloc[0]
+            self.assertEqual(row["triggers"], 1)
+            # Best symbol (+11%) vs cross-section mean (+5.5%): positive excess.
+            self.assertAlmostEqual(row["mean_signed_ret"], 0.11, places=6)
+            self.assertGreater(row["mean_excess_ret"], 0.0)
+            self.assertEqual(row["hit_rate"], 1.0)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

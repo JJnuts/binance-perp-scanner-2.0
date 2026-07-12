@@ -237,6 +237,12 @@ from perpscanner.scoring import (  # noqa: F401
     build_ltf_regime_metrics,
     _build_best_setups,
 )
+from perpscanner.research import (  # noqa: F401
+    log_scan_snapshot,
+    rank_ic_report,
+    snapshot_counts,
+    trigger_event_study,
+)
 from perpscanner.ui_styles import (  # noqa: F401
     _inject_app_styles,
 )
@@ -275,6 +281,7 @@ from perpscanner.ui_pages import (  # noqa: F401
     _render_gex_levels,
     _render_options_snapshot_table,
     _render_btc_options_cockpit,
+    _render_research_dashboard,
     _render_term_guide,
     _set_page,
     _render_glossary_jump,
