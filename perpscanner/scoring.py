@@ -61,6 +61,7 @@ from .data_binance import (
 )
 from .features_ltf import _direction_from_state, _ltf_interval_metrics
 from .features_htf import _btc_daily_regime, _daily_swing_context
+from .regime import thresholds_for_regime
 
 
 def _candidate_symbols(
@@ -455,6 +456,14 @@ def build_ltf_regime_metrics(
     if not btc_context:
         return pd.DataFrame()
 
+    # Scale the ignition gates with the BTC daily regime: fixed z-score
+    # thresholds fire too easily in hot tape and too rarely in quiet tape.
+    btc_daily_context = fetch_htf_daily_contexts((BTC_SYMBOL,)).get(BTC_SYMBOL, {})
+    btc_regime = _btc_daily_regime(
+        btc_daily_context.get("daily") if isinstance(btc_daily_context, dict) else None
+    )
+    thresholds = thresholds_for_regime(btc_regime)
+
     rows: list[dict[str, object]] = []
     btc_klines = btc_context.get("klines", {})
     eth_klines = eth_context.get("klines", {}) if eth_context else {}
@@ -497,7 +506,7 @@ def build_ltf_regime_metrics(
                 spot_df = None
             if not isinstance(oi_df, pd.DataFrame):
                 oi_df = pd.DataFrame()
-            row = _ltf_interval_metrics(symbol, interval, df, oi_df, btc_df, eth_df, spot_df)
+            row = _ltf_interval_metrics(symbol, interval, df, oi_df, btc_df, eth_df, spot_df, thresholds=thresholds)
             row["oi_value"] = oi_value
             row["quote_volume_24h"] = float(ticker_stats.get(symbol, {}).get("quote_volume_24h", 0.0))
             rows.append(row)

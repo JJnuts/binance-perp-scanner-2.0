@@ -27,6 +27,11 @@ ATR_ROC_THRESHOLD = 0.08
 VOLUME_Z_THRESHOLD = 2.0
 OI_Z_THRESHOLD = 2.0
 FRESH_TRIGGER_BARS = {"5m": 2, "15m": 2, "1h": 1}
+# Ignition trigger: hard vetoes (VWAP side + break-and-hold) plus a
+# weighted confluence of the remaining confirmations. The old 7-way AND
+# almost never fired outside broad market-wide moves.
+CONFLUENCE_TRIGGER_THRESHOLD = 0.60
+CONFLUENCE_WEIGHTS = {"expansion": 0.30, "volume": 0.25, "oi": 0.20, "taker": 0.15, "basis": 0.10}
 MAX_BEST_SETUP_TRIGGER_BARS = 3
 MIN_TF_ALIGNMENT = 2
 TAKER_IMBALANCE_THRESHOLD = 0.08

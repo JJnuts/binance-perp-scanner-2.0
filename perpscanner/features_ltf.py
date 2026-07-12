@@ -6,18 +6,18 @@ from typing import Optional
 
 from .config import (
     ATR_ROC_LOOKBACK,
-    ATR_ROC_THRESHOLD,
     BASIS_CONFIRM_BP,
     COMPRESSION_RECENT_BARS,
+    CONFLUENCE_TRIGGER_THRESHOLD,
+    CONFLUENCE_WEIGHTS,
     FRESH_TRIGGER_BARS,
-    OI_Z_THRESHOLD,
     RANGE_LOOKBACK_BARS,
     RS_LOOKBACK_BARS,
     TAKER_IMBALANCE_THRESHOLD,
     VOLUME_LOOKBACK,
-    VOLUME_Z_THRESHOLD,
     VWAP_SLOW,
 )
+from .regime import RegimeThresholds
 from .indicators import (
     _atr_series,
     _bars_since_latest_true,
@@ -51,7 +51,9 @@ def _ltf_interval_metrics(
     btc_df: pd.DataFrame,
     eth_df: Optional[pd.DataFrame],
     spot_df: Optional[pd.DataFrame],
+    thresholds: Optional[RegimeThresholds] = None,
 ) -> dict[str, object]:
+    thr = thresholds if thresholds is not None else RegimeThresholds()
     atr = _atr_series(df)
     atr_value = float(atr.iloc[-1]) if not atr.empty and pd.notna(atr.iloc[-1]) else 0.0
     atr_percentile_series = _rolling_percentile(atr)
@@ -101,9 +103,9 @@ def _ltf_interval_metrics(
     compression_recent_bars = int(compression_count_series.iloc[-1]) if not compression_count_series.empty else 0
 
     atr_compression_score = _compression_score(atr_percentile, volume_zscore, oi_zscore)
-    atr_expansion_score = _score_from_threshold(max(atr_roc, 0.0), ATR_ROC_THRESHOLD, 70.0)
-    volume_spike_score = _score_from_threshold(max(volume_zscore, 0.0), VOLUME_Z_THRESHOLD, 80.0)
-    oi_spike_score = _score_from_threshold(max(oi_zscore, 0.0), OI_Z_THRESHOLD, 80.0)
+    atr_expansion_score = _score_from_threshold(max(atr_roc, 0.0), thr.atr_roc, 70.0)
+    volume_spike_score = _score_from_threshold(max(volume_zscore, 0.0), thr.volume_z, 80.0)
+    oi_spike_score = _score_from_threshold(max(oi_zscore, 0.0), thr.oi_z, 80.0)
     range_break_score = _score_from_threshold(abs(breakout_distance_atr), 0.50, 75.0)
     rs_long_score = float(np.clip((rs_vs_btc * 800.0) + (rs_vs_eth * 500.0), 0.0, 100.0))
     rs_short_score = float(np.clip((-rs_vs_btc * 800.0) + (-rs_vs_eth * 500.0), 0.0, 100.0))
@@ -135,27 +137,35 @@ def _ltf_interval_metrics(
     basis_long_confirmed = bool(basis_long_series.iloc[-1]) if not basis_long_series.empty else False
     basis_short_confirmed = bool(basis_short_series.iloc[-1]) if not basis_short_series.empty else False
 
-    expansion_ready_series = (atr_roc_series > ATR_ROC_THRESHOLD) & (compression_count_series > 0)
-    volume_spike_series = volume_z_series > VOLUME_Z_THRESHOLD
-    oi_spike_series = oi_z_aligned > OI_Z_THRESHOLD
-    raw_long_trigger_series = (
-        expansion_ready_series
-        & volume_spike_series
-        & oi_spike_series
-        & (df["close"] > vwap_series)
-        & break_hold_long_series
-        & taker_long_series
-        & basis_long_series
+    expansion_ready_series = (atr_roc_series > thr.atr_roc) & (compression_count_series > 0)
+    volume_spike_series = volume_z_series > thr.volume_z
+    oi_spike_series = oi_z_aligned > thr.oi_z
+
+    # Confluence-plus-veto trigger. The structural conditions (right side
+    # of VWAP, break-and-hold of the prior range) are hard vetoes; the
+    # remaining confirmations are scored so a strong majority can fire
+    # without demanding all five at once (the old 7-way AND had a joint
+    # probability so low it mostly fired during market-wide moves).
+    long_veto_series = (df["close"] > vwap_series) & break_hold_long_series
+    short_veto_series = (df["close"] < vwap_series) & break_hold_short_series
+    long_confluence_series = (
+        CONFLUENCE_WEIGHTS["expansion"] * expansion_ready_series.astype(float)
+        + CONFLUENCE_WEIGHTS["volume"] * volume_spike_series.astype(float)
+        + CONFLUENCE_WEIGHTS["oi"] * oi_spike_series.astype(float)
+        + CONFLUENCE_WEIGHTS["taker"] * taker_long_series.astype(float)
+        + CONFLUENCE_WEIGHTS["basis"] * basis_long_series.astype(float)
     )
-    raw_short_trigger_series = (
-        expansion_ready_series
-        & volume_spike_series
-        & oi_spike_series
-        & (df["close"] < vwap_series)
-        & break_hold_short_series
-        & taker_short_series
-        & basis_short_series
+    short_confluence_series = (
+        CONFLUENCE_WEIGHTS["expansion"] * expansion_ready_series.astype(float)
+        + CONFLUENCE_WEIGHTS["volume"] * volume_spike_series.astype(float)
+        + CONFLUENCE_WEIGHTS["oi"] * oi_spike_series.astype(float)
+        + CONFLUENCE_WEIGHTS["taker"] * taker_short_series.astype(float)
+        + CONFLUENCE_WEIGHTS["basis"] * basis_short_series.astype(float)
     )
+    confluence_long = float(long_confluence_series.iloc[-1]) if not long_confluence_series.empty else 0.0
+    confluence_short = float(short_confluence_series.iloc[-1]) if not short_confluence_series.empty else 0.0
+    raw_long_trigger_series = long_veto_series & (long_confluence_series >= CONFLUENCE_TRIGGER_THRESHOLD)
+    raw_short_trigger_series = short_veto_series & (short_confluence_series >= CONFLUENCE_TRIGGER_THRESHOLD)
     long_trigger_transition = _latest_trigger_transition(raw_long_trigger_series)
     short_trigger_transition = _latest_trigger_transition(raw_short_trigger_series)
     long_bars_since_trigger = _bars_since_latest_true(long_trigger_transition)
@@ -239,6 +249,12 @@ def _ltf_interval_metrics(
         "bars_since_trigger": bars_since_trigger,
         "trigger_fresh": trigger_fresh,
         "trigger_direction": trigger_direction,
+        "confluence_long": confluence_long,
+        "confluence_short": confluence_short,
+        "regime": thr.regime,
+        "volume_z_gate": thr.volume_z,
+        "oi_z_gate": thr.oi_z,
+        "atr_roc_gate": thr.atr_roc,
         "rs_vs_btc": rs_vs_btc,
         "rs_vs_eth": rs_vs_eth,
     }

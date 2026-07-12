@@ -363,6 +363,70 @@ class ScoringHelperTests(unittest.TestCase):
             data_deribit.BTC_OPTIONS_BLOCK_DB_PATH = original_path
 
 
+class RegimeThresholdTests(unittest.TestCase):
+    def test_bull_trend_raises_gates(self):
+        thr = scanner.thresholds_for_regime({"btc_daily_regime": "Bull trend"})
+
+        self.assertGreater(thr.volume_z, scanner.VOLUME_Z_THRESHOLD)
+        self.assertGreater(thr.oi_z, scanner.OI_Z_THRESHOLD)
+        self.assertGreater(thr.atr_roc, scanner.ATR_ROC_THRESHOLD)
+        self.assertEqual(thr.regime, "Bull trend")
+
+    def test_range_lowers_gates(self):
+        thr = scanner.thresholds_for_regime({"btc_daily_regime": "Range"})
+
+        self.assertLess(thr.volume_z, scanner.VOLUME_Z_THRESHOLD)
+        self.assertLess(thr.oi_z, scanner.OI_Z_THRESHOLD)
+
+    def test_unknown_regime_keeps_static_defaults(self):
+        for regime_dict in (None, {}, {"btc_daily_regime": "Sideways-ish"}):
+            thr = scanner.thresholds_for_regime(regime_dict)
+            self.assertEqual(thr.volume_z, scanner.VOLUME_Z_THRESHOLD)
+            self.assertEqual(thr.oi_z, scanner.OI_Z_THRESHOLD)
+            self.assertEqual(thr.atr_roc, scanner.ATR_ROC_THRESHOLD)
+
+    def _trending_frame(self):
+        idx = pd.date_range("2026-01-01", periods=80, freq="5min")
+        close = pd.Series([100.0 + i * 0.1 for i in range(80)], index=idx)
+        return pd.DataFrame(
+            {
+                "open": close - 0.05,
+                "high": close + 0.20,
+                "low": close - 0.20,
+                "close": close,
+                "vol": [100.0 + i for i in range(80)],
+                "quote_vol": [10000.0 + i * 100.0 for i in range(80)],
+                "trades": [100 + i for i in range(80)],
+                "tb_quote": [5200.0 + i * 55.0 for i in range(80)],
+            },
+            index=idx,
+        )
+
+    def test_ltf_metrics_emit_confluence_and_gate_fields(self):
+        df = self._trending_frame()
+        row = scanner._ltf_interval_metrics("TESTUSDT", "5m", df, pd.DataFrame(), df, df, None)
+
+        for field in ("confluence_long", "confluence_short", "regime", "volume_z_gate", "oi_z_gate", "atr_roc_gate"):
+            self.assertIn(field, row)
+        self.assertGreaterEqual(row["confluence_long"], 0.0)
+        self.assertLessEqual(row["confluence_long"], 1.0)
+
+    def test_tighter_thresholds_lower_spike_scores(self):
+        df = self._trending_frame()
+        loose = scanner._ltf_interval_metrics(
+            "TESTUSDT", "5m", df, pd.DataFrame(), df, df, None,
+            thresholds=scanner.RegimeThresholds(volume_z=1.0, oi_z=1.0, atr_roc=0.04, regime="Range"),
+        )
+        tight = scanner._ltf_interval_metrics(
+            "TESTUSDT", "5m", df, pd.DataFrame(), df, df, None,
+            thresholds=scanner.RegimeThresholds(volume_z=4.0, oi_z=4.0, atr_roc=0.32, regime="Bull trend"),
+        )
+
+        self.assertGreaterEqual(loose["atr_expansion_score"], tight["atr_expansion_score"])
+        self.assertEqual(loose["regime"], "Range")
+        self.assertEqual(tight["regime"], "Bull trend")
+
+
 class ClosedBarTests(unittest.TestCase):
     def test_drop_unclosed_by_close_ts_removes_in_progress_bar(self):
         now_ms = scanner._epoch_ms_now()

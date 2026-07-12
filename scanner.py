@@ -196,6 +196,11 @@ from perpscanner.data_deribit import (  # noqa: F401
     _read_deribit_block_trades,
     _update_deribit_block_trade_store,
 )
+from perpscanner.regime import (  # noqa: F401
+    REGIME_THRESHOLD_MULTIPLIERS,
+    RegimeThresholds,
+    thresholds_for_regime,
+)
 from perpscanner.features_ltf import (  # noqa: F401
     _direction_from_state,
     _ltf_interval_metrics,
