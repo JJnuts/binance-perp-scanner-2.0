@@ -7,6 +7,8 @@ No API key required.
 """
 
 import warnings
+import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from html import escape
@@ -30,6 +32,7 @@ BINANCE_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com"
 DERIBIT_BASE = "https://www.deribit.com/api/v2"
 YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
+EODHD_BASE = "https://eodhd.com/api"
 INTERVAL = "1h"
 CANDLE_LIMIT = 240
 ETH_SYMBOL = "ETHUSDT"
@@ -89,15 +92,20 @@ CACHE_TTL = 280
 API_TIMEOUT = 15
 BTC_SYMBOL = "BTCUSDT"
 IBIT_SYMBOL = "IBIT"
+BTC_ETF_TICKERS = ("IBIT", "FBTC", "ARKB", "BITB")
 BTC_BUBBLE_LOOKBACK = 365
 BTC_OPTIONS_MAX_CONTRACTS = 180
 BTC_OPTIONS_MAX_DAYS = 120
 BTC_OPTIONS_KLINE_LIMIT = 576
 BTC_OPTIONS_HISTORY_PATH = Path(__file__).with_name("data") / "btc_options_history.csv"
+BTC_OPTIONS_BLOCK_DB_PATH = Path(__file__).with_name("data") / "deribit_block_trades.sqlite"
 FRONT_DAY_HOURS = 24
 FRONT_WEEK_DAYS = 7
 PIN_MAX_HOURS = 24
 PIN_DISTANCE_PCT = 2.0
+BLOCK_FLOW_RETENTION_DAYS = 30
+BLOCK_FLOW_PRIMARY_DAYS = 7
+BLOCK_RFQ_WEIGHT = 2.0
 BTC_BUBBLE_TIMEFRAMES = {
     "1D": {
         "label": "1D",
@@ -165,6 +173,14 @@ SPOT_COLOR_MAP = {
     "Cooling": "#3b82f6",
     "Heating": "#f472b6",
     "Overheating": "#ef4444",
+}
+SPOT_FLOW_COLOR_MAP = {
+    "Strong Buy": "#22c55e",
+    "Buy": "#86efac",
+    "Neutral": "#8a8f9c",
+    "Sell": "#fca5a5",
+    "Strong Sell": "#ef4444",
+    "Unknown": "#64748b",
 }
 APP_BG = "#0b100b"
 APP_PANEL = "#111811"
@@ -500,6 +516,9 @@ def _inject_app_styles():
                 border-radius: 4px;
                 padding: 0.9rem 1rem;
                 box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+                min-height: 76px;
+                position: relative;
+                overflow: hidden;
             }}
 
             [data-testid="stMetricLabel"] {{
@@ -514,6 +533,20 @@ def _inject_app_styles():
                 color: var(--app-accent);
                 font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
                 font-weight: 600;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                padding-right: 3.9rem;
+            }}
+
+            [data-testid="stMetricDelta"] {{
+                position: absolute;
+                right: 0.85rem;
+                bottom: 0.72rem;
+                margin: 0;
+                max-width: 3.6rem;
+                overflow: hidden;
+                white-space: nowrap;
             }}
 
             [data-testid="stRadio"] > div,
@@ -1834,16 +1867,39 @@ def _interval_to_timedelta(interval: str) -> pd.Timedelta:
 
 def _resample_spot_frame(df: pd.DataFrame, rule: Optional[str], source_name: str) -> pd.DataFrame:
     out = df.sort_values("ts").copy()
+    agg_map = {"close": ("close", "last"), "quote_volume": ("quote_volume", "sum")}
+    if "aggressive_buy_volume" in out.columns:
+        agg_map["aggressive_buy_volume"] = ("aggressive_buy_volume", "sum")
+    if "aggressive_sell_volume" in out.columns:
+        agg_map["aggressive_sell_volume"] = ("aggressive_sell_volume", "sum")
     if rule:
         out = (
             out.set_index("ts")
             .resample(rule)
-            .agg(close=("close", "last"), quote_volume=("quote_volume", "sum"))
+            .agg(**agg_map)
             .dropna()
             .reset_index()
         )
     out["source"] = source_name
-    return out[["ts", "close", "quote_volume", "source"]].sort_values("ts")
+    cols = ["ts", "close", "quote_volume", "source"]
+    for col in ("aggressive_buy_volume", "aggressive_sell_volume"):
+        if col in out.columns:
+            cols.insert(-1, col)
+    return out[cols].sort_values("ts")
+
+
+def _classify_spot_flow(imbalance: float, has_flow: bool = True) -> str:
+    if not has_flow or not np.isfinite(imbalance):
+        return "Unknown"
+    if imbalance >= 0.18:
+        return "Strong Buy"
+    if imbalance >= 0.05:
+        return "Buy"
+    if imbalance <= -0.18:
+        return "Strong Sell"
+    if imbalance <= -0.05:
+        return "Sell"
+    return "Neutral"
 
 
 def _prepare_bubble_frame(df: pd.DataFrame, z_window: int) -> pd.DataFrame:
@@ -1860,12 +1916,189 @@ def _prepare_bubble_frame(df: pd.DataFrame, z_window: int) -> pd.DataFrame:
     )
     out["volume_z"] = out["volume_z"].fillna(0.0)
     out["temperature"] = out["volume_z"].map(_classify_volume_temperature)
+    has_flow = {"aggressive_buy_volume", "aggressive_sell_volume"}.issubset(out.columns)
+    if has_flow:
+        out["aggressive_buy_volume"] = pd.to_numeric(out["aggressive_buy_volume"], errors="coerce").fillna(0.0)
+        out["aggressive_sell_volume"] = pd.to_numeric(out["aggressive_sell_volume"], errors="coerce").fillna(0.0)
+        flow_total = (out["aggressive_buy_volume"] + out["aggressive_sell_volume"]).replace(0.0, np.nan)
+        out["spot_delta"] = out["aggressive_buy_volume"] - out["aggressive_sell_volume"]
+        out["spot_imbalance"] = (out["spot_delta"] / flow_total).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        out["spot_cvd"] = out["spot_delta"].cumsum()
+        out["flow_state"] = out["spot_imbalance"].map(lambda value: _classify_spot_flow(float(value), True))
+    else:
+        out["aggressive_buy_volume"] = np.nan
+        out["aggressive_sell_volume"] = np.nan
+        out["spot_delta"] = np.nan
+        out["spot_imbalance"] = np.nan
+        out["spot_cvd"] = np.nan
+        out["flow_state"] = "Unknown"
     scale_base = float(out["quote_volume"].median()) if not out.empty else 1.0
     scale_base = max(scale_base, 1.0)
     out["bubble_size"] = (
         np.sqrt(out["quote_volume"] / scale_base) * BUBBLE_SIZE_MULTIPLIER
     ).clip(lower=BUBBLE_SIZE_MIN, upper=BUBBLE_SIZE_MAX)
     return out
+
+
+def _coinbase_premium_frame(binance_df: pd.DataFrame, coinbase_df: pd.DataFrame) -> pd.DataFrame:
+    if binance_df.empty or coinbase_df.empty:
+        return pd.DataFrame(columns=["ts", "binance_close", "coinbase_close", "coinbase_premium_bp"])
+    left = binance_df[["ts", "close"]].rename(columns={"close": "binance_close"}).sort_values("ts")
+    right = coinbase_df[["ts", "close"]].rename(columns={"close": "coinbase_close"}).sort_values("ts")
+    left["ts"] = pd.to_datetime(left["ts"]).astype("datetime64[ns]")
+    right["ts"] = pd.to_datetime(right["ts"]).astype("datetime64[ns]")
+    merged = pd.merge_asof(left, right, on="ts", direction="nearest", tolerance=pd.Timedelta(hours=2))
+    merged = merged.dropna(subset=["binance_close", "coinbase_close"])
+    if merged.empty:
+        return pd.DataFrame(columns=["ts", "binance_close", "coinbase_close", "coinbase_premium_bp"])
+    merged["coinbase_premium_bp"] = (
+        (merged["coinbase_close"] - merged["binance_close"])
+        / merged["binance_close"].replace(0.0, np.nan)
+        * 10000.0
+    ).replace([np.inf, -np.inf], np.nan)
+    return merged.dropna(subset=["coinbase_premium_bp"]).sort_values("ts")
+
+
+def _get_eodhd_api_token() -> str:
+    token = os.getenv("EODHD_API_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        return str(st.secrets.get("EODHD_API_TOKEN", "")).strip()
+    except Exception:
+        return ""
+
+
+def _fetch_eodhd_etf_history(ticker: str, lookback_days: int, api_token: str) -> pd.DataFrame:
+    start = (_utc_now_naive() - pd.Timedelta(days=max(lookback_days + 10, 45))).strftime("%Y-%m-%d")
+    raw = _get_json_url(
+        f"{EODHD_BASE}/eod/{ticker}.US",
+        params={"api_token": api_token, "fmt": "json", "period": "d", "from": start},
+        timeout=20,
+    )
+    if not isinstance(raw, list) or not raw:
+        return pd.DataFrame(columns=["date", "ticker", "close", "volume", "dollar_volume", "signed_dollar_volume"])
+    df = pd.DataFrame(raw)
+    if "date" not in df.columns or "close" not in df.columns or "volume" not in df.columns:
+        return pd.DataFrame(columns=["date", "ticker", "close", "volume", "dollar_volume", "signed_dollar_volume"])
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    close_col = "adjusted_close" if "adjusted_close" in df.columns else "close"
+    df["close"] = pd.to_numeric(df[close_col], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+    df = df.dropna(subset=["date", "close"]).sort_values("date")
+    df["session_return"] = df["close"].pct_change().fillna(0.0)
+    df["dollar_volume"] = df["close"] * df["volume"]
+    df["signed_dollar_volume"] = df["dollar_volume"] * np.sign(df["session_return"])
+    df["ticker"] = ticker
+    return df[["date", "ticker", "close", "volume", "dollar_volume", "signed_dollar_volume", "session_return"]]
+
+
+def _fetch_btc_etf_tape(lookback_days: int) -> dict[str, object]:
+    token = _get_eodhd_api_token()
+    if not token:
+        return {
+            "data": pd.DataFrame(),
+            "summary": {},
+            "error": "EODHD_API_TOKEN is not configured, so ETF tape is unavailable.",
+        }
+    frames = []
+    errors = {}
+    with ThreadPoolExecutor(max_workers=min(len(BTC_ETF_TICKERS), MAX_WORKERS)) as ex:
+        futures = {
+            ex.submit(_fetch_eodhd_etf_history, ticker, lookback_days, token): ticker
+            for ticker in BTC_ETF_TICKERS
+        }
+        for fut in as_completed(futures):
+            ticker = futures[fut]
+            try:
+                df = fut.result()
+                if df.empty:
+                    errors[ticker] = "Empty response"
+                else:
+                    frames.append(df)
+            except Exception as exc:
+                errors[ticker] = str(exc)
+    if not frames:
+        return {"data": pd.DataFrame(), "summary": {}, "error": "No ETF tape data returned from EODHD.", "errors": errors}
+
+    merged = pd.concat(frames, ignore_index=True)
+    daily = (
+        merged.groupby("date", as_index=False)
+        .agg(
+            etf_dollar_volume=("dollar_volume", "sum"),
+            etf_signed_dollar_volume=("signed_dollar_volume", "sum"),
+            etf_tickers=("ticker", "nunique"),
+        )
+        .sort_values("date")
+    )
+    daily["etf_flow_proxy_ratio"] = (
+        daily["etf_signed_dollar_volume"] / daily["etf_dollar_volume"].replace(0.0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    latest = daily.iloc[-1]
+    lookback = daily.tail(5)
+    summary = {
+        "latest_date": latest["date"],
+        "latest_dollar_volume": float(latest["etf_dollar_volume"]),
+        "latest_signed_proxy": float(latest["etf_signed_dollar_volume"]),
+        "latest_proxy_ratio": float(latest["etf_flow_proxy_ratio"]),
+        "five_day_signed_proxy": float(lookback["etf_signed_dollar_volume"].sum()),
+        "five_day_dollar_volume": float(lookback["etf_dollar_volume"].sum()),
+        "tickers": int(latest["etf_tickers"]),
+    }
+    return {"data": daily.tail(max(lookback_days, 30)), "summary": summary, "error": "", "errors": errors}
+
+
+def _spot_flow_summary(df: pd.DataFrame, premium_df: pd.DataFrame, etf_tape: dict[str, object]) -> dict[str, object]:
+    if df.empty:
+        return {"state": "Unavailable", "copy": "No spot-flow data is available for this view."}
+    latest = df.iloc[-1]
+    has_flow = str(latest.get("flow_state", "Unknown")) != "Unknown"
+    imbalance = _safe_float(latest.get("spot_imbalance"), np.nan)
+    cvd_delta = 0.0
+    price_delta = 0.0
+    if has_flow and len(df) >= 6:
+        cvd_delta = _safe_float(df["spot_cvd"].iloc[-1] - df["spot_cvd"].iloc[-6])
+        price_delta = _safe_float(df["close"].iloc[-1] / df["close"].iloc[-6] - 1.0)
+
+    premium_latest = np.nan
+    premium_delta = np.nan
+    if not premium_df.empty:
+        premium_latest = _safe_float(premium_df["coinbase_premium_bp"].iloc[-1], np.nan)
+        if len(premium_df) >= 6:
+            premium_delta = _safe_float(
+                premium_df["coinbase_premium_bp"].iloc[-1] - premium_df["coinbase_premium_bp"].iloc[-6],
+                np.nan,
+            )
+
+    etf_summary = etf_tape.get("summary", {}) if isinstance(etf_tape, dict) else {}
+    etf_ratio = _safe_float(etf_summary.get("latest_proxy_ratio"), np.nan)
+
+    if has_flow and cvd_delta > 0 and abs(price_delta) < 0.01:
+        state = "Accumulation"
+        copy = "Spot CVD is rising while price is relatively contained, which points to quiet buyer absorption."
+    elif has_flow and cvd_delta < 0 and abs(price_delta) < 0.01:
+        state = "Distribution"
+        copy = "Spot CVD is falling while price is holding up, which points to sellers distributing into visible demand."
+    elif has_flow and imbalance >= 0.05 and cvd_delta > 0:
+        state = "Aggressive buying"
+        copy = "Aggressive spot buyers are leading the latest bar and CVD is confirming the push."
+    elif has_flow and imbalance <= -0.05 and cvd_delta < 0:
+        state = "Aggressive selling"
+        copy = "Aggressive spot sellers are leading the latest bar and CVD is confirming the pressure."
+    else:
+        state = "Neutral"
+        copy = "Spot aggression is not giving a clean one-sided read in the selected view."
+
+    return {
+        "state": state,
+        "copy": copy,
+        "latest_imbalance": imbalance,
+        "cvd_delta": cvd_delta,
+        "price_delta": price_delta,
+        "premium_latest": premium_latest,
+        "premium_delta": premium_delta,
+        "etf_proxy_ratio": etf_ratio,
+    }
 
 
 def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
@@ -1881,8 +2114,8 @@ def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
         raw = _get_json_url("https://api.binance.com/api/v3/klines", params=params, timeout=20)
         if not raw:
             break
-        chunk = pd.DataFrame(raw).iloc[:, [0, 4, 7]].copy()
-        chunk.columns = ["ts", "close", "quote_volume"]
+        chunk = pd.DataFrame(raw).iloc[:, [0, 4, 7, 10]].copy()
+        chunk.columns = ["ts", "close", "quote_volume", "aggressive_buy_volume"]
         chunks.append(chunk)
         first_open = int(chunk.iloc[0]["ts"])
         end_time = first_open - interval_ms
@@ -1897,8 +2130,12 @@ def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
+    df["aggressive_buy_volume"] = df["aggressive_buy_volume"].astype(float)
+    df["aggressive_sell_volume"] = (df["quote_volume"] - df["aggressive_buy_volume"]).clip(lower=0.0)
     df["source"] = "Binance spot"
-    return df[["ts", "close", "quote_volume", "source"]].tail(limit)
+    return df[
+        ["ts", "close", "quote_volume", "aggressive_buy_volume", "aggressive_sell_volume", "source"]
+    ].tail(limit)
 
 
 def _fetch_coinbase_spot_btc(limit: int, granularity: int, rule: Optional[str]) -> pd.DataFrame:
@@ -2061,39 +2298,59 @@ def build_bitcoin_bubble_data(lookback_days: int, timeframe_key: str) -> dict[st
     aggregated = pd.DataFrame()
     aggregate_keys = [key for key in ("binance", "coinbase", "bybit", "okx", "kraken") if key in sources]
     if aggregate_keys:
-        frames = [sources[key][["ts", "close", "quote_volume"]] for key in aggregate_keys]
+        frames = []
+        for key in aggregate_keys:
+            cols = ["ts", "close", "quote_volume"]
+            for flow_col in ("aggressive_buy_volume", "aggressive_sell_volume"):
+                if flow_col in sources[key].columns:
+                    cols.append(flow_col)
+            frames.append(sources[key][cols])
         merged = pd.concat(frames, ignore_index=True)
+        agg_map = {"close": ("close", "mean"), "quote_volume": ("quote_volume", "sum")}
+        if "aggressive_buy_volume" in merged.columns:
+            agg_map["aggressive_buy_volume"] = ("aggressive_buy_volume", "sum")
+        if "aggressive_sell_volume" in merged.columns:
+            agg_map["aggressive_sell_volume"] = ("aggressive_sell_volume", "sum")
         aggregated = (
             merged.groupby("ts", as_index=False)
-            .agg(close=("close", "mean"), quote_volume=("quote_volume", "sum"))
+            .agg(**agg_map)
             .sort_values("ts")
         )
         aggregated["source"] = "Aggregated CEX spot"
         aggregated = _prepare_bubble_frame(aggregated.tail(limit), int(config["z_window"])).tail(display_bars)
+    premium = _coinbase_premium_frame(sources.get("binance", pd.DataFrame()), sources.get("coinbase", pd.DataFrame()))
+    etf_tape = _fetch_btc_etf_tape(min(max(lookback_days, 30), 365))
 
     return {
         "sources": sources,
         "aggregated": aggregated,
         "errors": errors,
         "aggregate_keys": aggregate_keys,
+        "coinbase_premium": premium,
+        "etf_tape": etf_tape,
     }
 
 
 def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
+    color_col = "flow_state" if "flow_state" in df.columns and (df["flow_state"] != "Unknown").any() else "temperature"
+    color_map = SPOT_FLOW_COLOR_MAP if color_col == "flow_state" else SPOT_COLOR_MAP
+    legend_title = "Spot Flow" if color_col == "flow_state" else "Volume State"
     fig = px.scatter(
         df,
         x="ts",
         y="close",
         size="bubble_size",
         size_max=int(BUBBLE_SIZE_MAX),
-        color="temperature",
-        color_discrete_map=SPOT_COLOR_MAP,
+        color=color_col,
+        color_discrete_map=color_map,
         hover_name="source",
         hover_data={
             "ts": "|%Y-%m-%d",
             "close": ":,.2f",
             "quote_volume": ":,.0f",
             "volume_z": ":.2f",
+            "spot_imbalance": ":.2%",
+            "spot_delta": ":,.0f",
             "bubble_size": False,
         },
         title=title,
@@ -2105,7 +2362,7 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
         plot_bgcolor=APP_PANEL,
         paper_bgcolor=APP_BG,
         font_color=APP_TEXT,
-        legend_title="Volume State",
+        legend_title=legend_title,
         title_font_size=17,
         xaxis_title="Date",
         yaxis_title="BTC Price (USD)",
@@ -2115,6 +2372,91 @@ def _build_bitcoin_bubble_chart(df: pd.DataFrame, title: str):
             font=dict(color=APP_TEXT),
         ),
         margin=dict(l=30, r=20, t=60, b=30),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_spot_cvd_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if "spot_cvd" in df.columns and df["spot_cvd"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["spot_cvd"],
+                mode="lines",
+                name="Spot CVD",
+                line=dict(color="#86efac", width=2),
+            )
+        )
+    fig.update_layout(
+        template="plotly_dark",
+        height=260,
+        title="Spot CVD - Aggressive Buy Volume Minus Aggressive Sell Volume",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=55, b=25),
+        xaxis_title="Date",
+        yaxis_title="CVD (USD notional)",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_coinbase_premium_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if not df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["coinbase_premium_bp"],
+                mode="lines",
+                name="Coinbase Premium",
+                line=dict(color="#93c5fd", width=2),
+            )
+        )
+        fig.add_hline(y=0, line_color=APP_MUTED, line_dash="dot")
+    fig.update_layout(
+        template="plotly_dark",
+        height=240,
+        title="Coinbase Premium - Coinbase BTC/USD vs Binance BTC/USDT",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=55, b=25),
+        xaxis_title="Date",
+        yaxis_title="Premium (bp)",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_etf_tape_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if not df.empty:
+        colors = np.where(df["etf_signed_dollar_volume"] >= 0, "#22c55e", "#ef4444")
+        fig.add_trace(
+            go.Bar(
+                x=df["date"],
+                y=df["etf_signed_dollar_volume"],
+                name="ETF Demand Proxy",
+                marker_color=colors,
+            )
+        )
+    fig.update_layout(
+        template="plotly_dark",
+        height=260,
+        title="BTC ETF Tape Proxy - Signed Dollar Volume, Not Reported Net Flow",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=20, t=55, b=25),
+        xaxis_title="Date",
+        yaxis_title="Signed dollar volume",
     )
     fig.update_xaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
     fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
@@ -2409,6 +2751,130 @@ def _strike_map_for_options(options_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _format_expiry_distance(hours_to_expiry: float) -> str:
+    hours = max(_safe_float(hours_to_expiry), 0.0)
+    if hours < 1.0:
+        return "<1h"
+    if hours < 36.0:
+        return f"{hours:.0f}h"
+    return f"{hours / 24.0:.1f}d"
+
+
+def _display_expiry_label(expiry_label: object, hours_to_expiry: float) -> str:
+    label = str(expiry_label or "n/a")
+    return f"{label} ({_format_expiry_distance(hours_to_expiry)})"
+
+
+def _top_expiry_hover_lines(group: pd.DataFrame, value_col: str, total: float) -> str:
+    if group.empty or total <= 0:
+        return "No material expiry concentration"
+    lines = []
+    for _, row in group.sort_values(value_col, ascending=False).head(3).iterrows():
+        value = _safe_float(row.get(value_col))
+        if value <= 0:
+            continue
+        share = value / max(total, 1e-12)
+        lines.append(
+            f"{_display_expiry_label(row.get('expiry_label'), _safe_float(row.get('hours_to_expiry')))}: "
+            f"{value / 1000.0:.2f}B ({share:.0%})"
+        )
+    return "<br>".join(lines) if lines else "No material expiry concentration"
+
+
+def _strike_expiry_context(options_df: pd.DataFrame, strike_map: pd.DataFrame, spot: float) -> pd.DataFrame:
+    if options_df.empty or strike_map.empty:
+        return strike_map.copy()
+
+    expiry_groups = (
+        options_df.groupby(["strike", "expiry_label", "expiration_ts"], as_index=False)
+        .agg(
+            call_gex=("call_gex", "sum"),
+            put_gex=("put_gex", "sum"),
+            signed_gex=("signed_gex", "sum"),
+            abs_gex=("gex_abs", "sum"),
+            total_oi=("open_interest", "sum"),
+            hours_to_expiry=("hours_to_expiry", "min"),
+        )
+        .sort_values(["strike", "expiration_ts"])
+    )
+
+    rows: list[dict[str, object]] = []
+    for strike, group in expiry_groups.groupby("strike", sort=True):
+        total_abs = _safe_float(group["abs_gex"].sum())
+        call_total = _safe_float(group["call_gex"].sum())
+        put_total = _safe_float(group["put_gex"].sum())
+        dominant = group.sort_values("abs_gex", ascending=False).iloc[0] if total_abs > 0 else group.iloc[0]
+        front_24h = _safe_float(group.loc[group["hours_to_expiry"] <= FRONT_DAY_HOURS, "abs_gex"].sum())
+        front_7d = _safe_float(group.loc[group["hours_to_expiry"] <= FRONT_WEEK_DAYS * 24, "abs_gex"].sum())
+        rows.append(
+            {
+                "strike": _safe_float(strike),
+                "call_expiry_hover": _top_expiry_hover_lines(group, "call_gex", call_total),
+                "put_expiry_hover": _top_expiry_hover_lines(group, "put_gex", put_total),
+                "dominant_expiry": _display_expiry_label(dominant.get("expiry_label"), _safe_float(dominant.get("hours_to_expiry"))),
+                "dominant_expiry_share": _safe_float(dominant.get("abs_gex")) / max(total_abs, 1e-12),
+                "front_24h_share": front_24h / max(total_abs, 1e-12),
+                "front_7d_share": front_7d / max(total_abs, 1e-12),
+                "distance_pct": ((float(strike) / spot) - 1.0) * 100.0 if spot > 0 else 0.0,
+            }
+        )
+
+    return strike_map.merge(pd.DataFrame(rows), on="strike", how="left")
+
+
+def _strike_expiry_breakdown_table(options_df: pd.DataFrame, spot: float, limit: int = 18) -> pd.DataFrame:
+    if options_df.empty:
+        return pd.DataFrame()
+    nearby = options_df[(options_df["strike"] >= spot * 0.85) & (options_df["strike"] <= spot * 1.15)].copy()
+    if nearby.empty:
+        nearby = options_df.copy()
+
+    expiry_groups = (
+        nearby.groupby(["strike", "expiry_label", "expiration_ts"], as_index=False)
+        .agg(
+            call_gex=("call_gex", "sum"),
+            put_gex=("put_gex", "sum"),
+            signed_gex=("signed_gex", "sum"),
+            abs_gex=("gex_abs", "sum"),
+            total_oi=("open_interest", "sum"),
+            hours_to_expiry=("hours_to_expiry", "min"),
+        )
+        .sort_values(["strike", "expiration_ts"])
+    )
+
+    rows: list[dict[str, object]] = []
+    for strike, group in expiry_groups.groupby("strike", sort=True):
+        total_abs = _safe_float(group["abs_gex"].sum())
+        if total_abs <= 0:
+            continue
+        call_total = _safe_float(group["call_gex"].sum())
+        put_total = _safe_float(group["put_gex"].sum())
+        call_top = group.sort_values("call_gex", ascending=False).iloc[0]
+        put_top = group.sort_values("put_gex", ascending=False).iloc[0]
+        dominant = group.sort_values("abs_gex", ascending=False).iloc[0]
+        rows.append(
+            {
+                "strike": _safe_float(strike),
+                "distance_pct": ((float(strike) / spot) - 1.0) * 100.0 if spot > 0 else 0.0,
+                "total_gex_b": total_abs / 1000.0,
+                "call_gex_b": call_total / 1000.0,
+                "put_gex_b": put_total / 1000.0,
+                "net_gex_b": _safe_float(group["signed_gex"].sum()) / 1000.0,
+                "dominant_expiry": _display_expiry_label(dominant.get("expiry_label"), _safe_float(dominant.get("hours_to_expiry"))),
+                "dominant_share": _safe_float(dominant.get("abs_gex")) / max(total_abs, 1e-12),
+                "top_call_expiry": _display_expiry_label(call_top.get("expiry_label"), _safe_float(call_top.get("hours_to_expiry"))) if call_total > 0 else "n/a",
+                "top_put_expiry": _display_expiry_label(put_top.get("expiry_label"), _safe_float(put_top.get("hours_to_expiry"))) if put_total > 0 else "n/a",
+                "front_24h_share": _safe_float(group.loc[group["hours_to_expiry"] <= FRONT_DAY_HOURS, "abs_gex"].sum()) / max(total_abs, 1e-12),
+                "front_7d_share": _safe_float(group.loc[group["hours_to_expiry"] <= FRONT_WEEK_DAYS * 24, "abs_gex"].sum()) / max(total_abs, 1e-12),
+                "total_oi": _safe_float(group["total_oi"].sum()),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("total_gex_b", ascending=False).head(limit)
+
+
 def _front_gex_summary(options_df: pd.DataFrame, spot: float, max_hours: float, label: str) -> dict[str, object]:
     front = options_df[(options_df["hours_to_expiry"] > 0) & (options_df["hours_to_expiry"] <= max_hours)].copy()
     if front.empty:
@@ -2591,6 +3057,260 @@ def _history_comparison(history: pd.DataFrame, current: dict[str, object]) -> di
     }
 
 
+def _init_block_trade_store() -> sqlite3.Connection:
+    BTC_OPTIONS_BLOCK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(BTC_OPTIONS_BLOCK_DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deribit_block_trades (
+            trade_id TEXT PRIMARY KEY,
+            block_trade_id TEXT NOT NULL,
+            block_rfq_id TEXT,
+            combo_id TEXT,
+            combo_trade_id TEXT,
+            block_trade_leg_count INTEGER,
+            timestamp INTEGER NOT NULL,
+            instrument_name TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            amount REAL,
+            contracts REAL,
+            price REAL,
+            mark_price REAL,
+            iv REAL,
+            index_price REAL,
+            inserted_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_deribit_blocks_ts ON deribit_block_trades(timestamp)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_deribit_blocks_block_id ON deribit_block_trades(block_trade_id)")
+    return conn
+
+
+def _fetch_recent_deribit_block_trades() -> list[dict[str, object]]:
+    payload = _get_deribit(
+        "public/get_last_trades_by_currency",
+        params={"currency": "BTC", "kind": "option", "count": 1000, "sorting": "desc"},
+        timeout=20,
+    )
+    trades = payload.get("trades", []) if isinstance(payload, dict) else []
+    return [trade for trade in trades if isinstance(trade, dict) and trade.get("block_trade_id") and trade.get("trade_id")]
+
+
+def _store_deribit_block_trades(trades: list[dict[str, object]]) -> dict[str, int]:
+    conn = _init_block_trade_store()
+    inserted = 0
+    try:
+        now_text = _utc_now_naive().isoformat()
+        rows = []
+        for trade in trades:
+            rows.append(
+                (
+                    str(trade.get("trade_id")),
+                    str(trade.get("block_trade_id")),
+                    str(trade.get("block_rfq_id")) if trade.get("block_rfq_id") not in (None, "") else None,
+                    str(trade.get("combo_id")) if trade.get("combo_id") not in (None, "") else None,
+                    str(trade.get("combo_trade_id")) if trade.get("combo_trade_id") not in (None, "") else None,
+                    int(_safe_float(trade.get("block_trade_leg_count"), 1.0)),
+                    int(_safe_float(trade.get("timestamp"))),
+                    str(trade.get("instrument_name", "")),
+                    str(trade.get("direction", "")).lower(),
+                    _safe_float(trade.get("amount")),
+                    _safe_float(trade.get("contracts")),
+                    _safe_float(trade.get("price")),
+                    _safe_float(trade.get("mark_price")),
+                    _safe_float(trade.get("iv")),
+                    _safe_float(trade.get("index_price")),
+                    now_text,
+                )
+            )
+        before = conn.total_changes
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO deribit_block_trades (
+                trade_id, block_trade_id, block_rfq_id, combo_id, combo_trade_id,
+                block_trade_leg_count, timestamp, instrument_name, direction,
+                amount, contracts, price, mark_price, iv, index_price, inserted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        inserted = conn.total_changes - before
+        cutoff_ms = int((_utc_now_naive() - pd.Timedelta(days=BLOCK_FLOW_RETENTION_DAYS)).timestamp() * 1000)
+        conn.execute("DELETE FROM deribit_block_trades WHERE timestamp < ?", (cutoff_ms,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"fetched": len(trades), "inserted": int(inserted)}
+
+
+def _read_deribit_block_trades(days: int = BLOCK_FLOW_RETENTION_DAYS) -> pd.DataFrame:
+    if not BTC_OPTIONS_BLOCK_DB_PATH.exists():
+        return pd.DataFrame()
+    cutoff_ms = int((_utc_now_naive() - pd.Timedelta(days=days)).timestamp() * 1000)
+    conn = sqlite3.connect(BTC_OPTIONS_BLOCK_DB_PATH)
+    try:
+        df = pd.read_sql_query(
+            "SELECT * FROM deribit_block_trades WHERE timestamp >= ? ORDER BY timestamp DESC",
+            conn,
+            params=(cutoff_ms,),
+        )
+    finally:
+        conn.close()
+    if df.empty:
+        return df
+    df["ts"] = pd.to_datetime(df["timestamp"].astype(np.int64), unit="ms", utc=True).dt.tz_localize(None)
+    for col in ["amount", "contracts", "price", "mark_price", "iv", "index_price"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    return df
+
+
+def _update_deribit_block_trade_store() -> dict[str, object]:
+    try:
+        trades = _fetch_recent_deribit_block_trades()
+        result = _store_deribit_block_trades(trades)
+        result["error"] = ""
+        return result
+    except Exception as exc:
+        return {"fetched": 0, "inserted": 0, "error": str(exc)}
+
+
+def _block_flow_gamma_map(options_df: pd.DataFrame, days: int = BLOCK_FLOW_PRIMARY_DAYS) -> dict[str, object]:
+    trades = _read_deribit_block_trades(days)
+    columns = [
+        "strike",
+        "block_adjusted_gex",
+        "block_abs_gex",
+        "block_trades",
+        "block_count",
+        "rfq_trades",
+        "matched_legs",
+        "direction_buy_legs",
+        "direction_sell_legs",
+    ]
+    empty = pd.DataFrame(columns=columns)
+    if trades.empty or options_df.empty:
+        return {
+            "strike_map": empty,
+            "trades": trades,
+            "total_block_gex": 0.0,
+            "total_abs_block_gex": 0.0,
+            "matched_legs": 0,
+            "unmatched_legs": int(len(trades)),
+            "stored_trades": int(len(trades)),
+            "blocks": 0,
+            "rfq_trades": 0,
+            "window_days": days,
+            "status": "No block flow stored yet.",
+        }
+
+    greeks = options_df[
+        ["instrument_name", "strike", "option_type", "gamma", "contract_size", "underlying_price"]
+    ].copy()
+    merged = trades.merge(greeks, on="instrument_name", how="left", indicator=True)
+    matched = merged[merged["_merge"] == "both"].copy()
+    if matched.empty:
+        return {
+            "strike_map": empty,
+            "trades": trades,
+            "total_block_gex": 0.0,
+            "total_abs_block_gex": 0.0,
+            "matched_legs": 0,
+            "unmatched_legs": int(len(trades)),
+            "stored_trades": int(len(trades)),
+            "blocks": int(trades["block_trade_id"].nunique()) if "block_trade_id" in trades else 0,
+            "rfq_trades": int(trades["block_rfq_id"].notna().sum()) if "block_rfq_id" in trades else 0,
+            "window_days": days,
+            "status": "Stored block flow did not match the current live option-greeks universe.",
+        }
+
+    matched["dealer_sign"] = np.where(matched["direction"].str.lower() == "buy", -1.0, 1.0)
+    matched["rfq_weight"] = np.where(matched["block_rfq_id"].notna() & (matched["block_rfq_id"].astype(str) != ""), BLOCK_RFQ_WEIGHT, 1.0)
+    matched["underlying_for_gex"] = matched["underlying_price"].replace(0.0, np.nan).fillna(matched["index_price"])
+    matched["leg_gex_abs"] = (
+        matched["gamma"].abs()
+        * matched["amount"].abs()
+        * matched["underlying_for_gex"].replace(0.0, np.nan).fillna(0.0)
+        * matched["underlying_for_gex"].replace(0.0, np.nan).fillna(0.0)
+        * matched["contract_size"].replace(0.0, 1.0).fillna(1.0)
+        / 1_000_000.0
+    )
+    matched["block_adjusted_gex"] = matched["dealer_sign"] * matched["leg_gex_abs"] * matched["rfq_weight"]
+    matched["is_rfq"] = matched["block_rfq_id"].notna() & (matched["block_rfq_id"].astype(str) != "")
+    grouped = (
+        matched.groupby("strike", as_index=False)
+        .agg(
+            block_adjusted_gex=("block_adjusted_gex", "sum"),
+            block_abs_gex=("leg_gex_abs", "sum"),
+            block_trades=("trade_id", "nunique"),
+            block_count=("block_trade_id", "nunique"),
+            rfq_trades=("is_rfq", "sum"),
+            matched_legs=("trade_id", "count"),
+            direction_buy_legs=("direction", lambda values: int((values.str.lower() == "buy").sum())),
+            direction_sell_legs=("direction", lambda values: int((values.str.lower() == "sell").sum())),
+        )
+        .sort_values("strike")
+    )
+    total_block_gex = float(grouped["block_adjusted_gex"].sum())
+    total_abs_block_gex = float(grouped["block_abs_gex"].sum())
+    status = (
+        f"{int(len(matched))} matched block legs across {int(matched['block_trade_id'].nunique())} blocks "
+        f"in the last {days}D. RFQ-tagged legs get {BLOCK_RFQ_WEIGHT:.1f}x confidence weight."
+    )
+    return {
+        "strike_map": grouped[columns],
+        "trades": matched,
+        "total_block_gex": total_block_gex,
+        "total_abs_block_gex": total_abs_block_gex,
+        "matched_legs": int(len(matched)),
+        "unmatched_legs": int((merged["_merge"] != "both").sum()),
+        "stored_trades": int(len(trades)),
+        "blocks": int(matched["block_trade_id"].nunique()),
+        "rfq_trades": int(matched["is_rfq"].sum()),
+        "window_days": days,
+        "status": status,
+    }
+
+
+def _merge_block_flow_into_strikes(strike_map: pd.DataFrame, block_map: pd.DataFrame) -> pd.DataFrame:
+    out = strike_map.copy()
+    if block_map.empty:
+        out["block_adjusted_gex"] = 0.0
+        out["block_abs_gex"] = 0.0
+        out["block_count"] = 0
+        out["rfq_trades"] = 0
+    else:
+        out = out.merge(
+            block_map[["strike", "block_adjusted_gex", "block_abs_gex", "block_count", "rfq_trades"]],
+            on="strike",
+            how="left",
+        )
+        for col in ["block_adjusted_gex", "block_abs_gex", "block_count", "rfq_trades"]:
+            out[col] = out[col].fillna(0.0)
+    out["block_agreement"] = np.where(
+        out["block_abs_gex"] <= 0,
+        "No block read",
+        np.where(np.sign(out["signed_gex"]) == np.sign(out["block_adjusted_gex"]), "Agrees", "Disagrees"),
+    )
+    return out
+
+
+def _block_flow_disagreement_rows(strike_map: pd.DataFrame, spot: float, limit: int = 3) -> pd.DataFrame:
+    if strike_map.empty or "block_agreement" not in strike_map.columns:
+        return pd.DataFrame()
+    nearby = strike_map[
+        (strike_map["block_agreement"] == "Disagrees")
+        & (strike_map["strike"] >= spot * 0.80)
+        & (strike_map["strike"] <= spot * 1.20)
+    ].copy()
+    if nearby.empty:
+        return nearby
+    nearby["distance_pct"] = ((nearby["strike"] / spot) - 1.0) * 100.0
+    nearby["importance"] = nearby["block_abs_gex"].abs() * (1.0 + nearby["rfq_trades"].clip(lower=0.0))
+    return nearby.sort_values("importance", ascending=False).head(limit)
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": "false"}, timeout=20)
@@ -2688,6 +3408,13 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     options_df["moneyness_pct"] = ((options_df["strike"] / spot) - 1.0) * 100.0
 
     strike_map = _strike_map_for_options(options_df)
+    block_store_update = _update_deribit_block_trade_store()
+    block_flow_7d = _block_flow_gamma_map(options_df, BLOCK_FLOW_PRIMARY_DAYS)
+    block_flow_30d = _block_flow_gamma_map(options_df, BLOCK_FLOW_RETENTION_DAYS)
+    strike_map = _merge_block_flow_into_strikes(strike_map, block_flow_7d.get("strike_map", pd.DataFrame()))
+    block_disagreements = _block_flow_disagreement_rows(strike_map, spot)
+    strike_expiry_context = _strike_expiry_context(options_df, strike_map, spot)
+    strike_expiry_breakdown = _strike_expiry_breakdown_table(options_df, spot)
     expiry_map = (
         options_df.groupby(["expiry_label", "expiration_ts"], as_index=False)
         .agg(abs_gex=("gex_abs", "sum"), signed_gex=("signed_gex", "sum"), total_oi=("open_interest", "sum"), avg_iv=("effective_iv", "mean"))
@@ -2753,6 +3480,12 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
         "spot": spot,
         "options_df": options_df,
         "strike_map": strike_map,
+        "block_store_update": block_store_update,
+        "block_flow_7d": block_flow_7d,
+        "block_flow_30d": block_flow_30d,
+        "block_disagreements": block_disagreements,
+        "strike_expiry_context": strike_expiry_context,
+        "strike_expiry_breakdown": strike_expiry_breakdown,
         "expiry_map": expiry_map,
         "atm_iv": atm_iv,
         "support_levels": support_levels,
@@ -2787,13 +3520,95 @@ def _build_gex_strike_chart(strike_map: pd.DataFrame, spot: float) -> go.Figure:
         nearby = strike_map.copy()
     nearby["call_gex_b"] = nearby["call_gex"] / 1000.0
     nearby["put_gex_b"] = nearby["put_gex"] / 1000.0
+    if "block_adjusted_gex" in nearby.columns:
+        nearby["block_adjusted_gex_b"] = nearby["block_adjusted_gex"] / 1000.0
+    else:
+        nearby["block_adjusted_gex_b"] = 0.0
+    for col, default in {
+        "call_expiry_hover": "Expiry detail unavailable",
+        "put_expiry_hover": "Expiry detail unavailable",
+        "dominant_expiry": "n/a",
+        "dominant_expiry_share": 0.0,
+        "front_24h_share": 0.0,
+        "front_7d_share": 0.0,
+    }.items():
+        if col not in nearby.columns:
+            nearby[col] = default
+    customdata = nearby[
+        [
+            "call_expiry_hover",
+            "put_expiry_hover",
+            "front_24h_share",
+            "front_7d_share",
+            "dominant_expiry",
+            "dominant_expiry_share",
+            "call_gex_b",
+            "put_gex_b",
+        ]
+    ].to_numpy()
     fig = go.Figure()
-    fig.add_bar(name="Call GEX", x=nearby["strike"], y=nearby["call_gex_b"], marker_color="#9fab95")
-    fig.add_bar(name="Put GEX", x=nearby["strike"], y=-nearby["put_gex_b"], marker_color="#f472b6")
+    fig.add_bar(
+        name="Call GEX",
+        x=nearby["strike"],
+        y=nearby["call_gex_b"],
+        marker_color="#9fab95",
+        customdata=customdata,
+        hovertemplate=(
+            "Strike %{x:,.0f}<br>"
+            "Call GEX %{customdata[6]:.2f}B<br>"
+            "Top call expiries:<br>%{customdata[0]}<br>"
+            "Dominant total expiry: %{customdata[4]} (%{customdata[5]:.0%})<br>"
+            "Front 24h share: %{customdata[2]:.0%}<br>"
+            "Front 7d share: %{customdata[3]:.0%}"
+            "<extra>Call GEX</extra>"
+        ),
+    )
+    fig.add_bar(
+        name="Put GEX",
+        x=nearby["strike"],
+        y=-nearby["put_gex_b"],
+        marker_color="#f472b6",
+        customdata=customdata,
+        hovertemplate=(
+            "Strike %{x:,.0f}<br>"
+            "Put GEX %{customdata[7]:.2f}B<br>"
+            "Top put expiries:<br>%{customdata[1]}<br>"
+            "Dominant total expiry: %{customdata[4]} (%{customdata[5]:.0%})<br>"
+            "Front 24h share: %{customdata[2]:.0%}<br>"
+            "Front 7d share: %{customdata[3]:.0%}"
+            "<extra>Put GEX</extra>"
+        ),
+    )
+    if nearby["block_adjusted_gex_b"].abs().sum() > 0:
+        colors = np.where(
+            nearby.get("block_agreement", pd.Series(index=nearby.index, data="No block read")).eq("Agrees"),
+            "rgba(34, 197, 94, 0.62)",
+            np.where(
+                nearby.get("block_agreement", pd.Series(index=nearby.index, data="No block read")).eq("Disagrees"),
+                "rgba(244, 211, 94, 0.72)",
+                "rgba(148, 163, 184, 0.35)",
+            ),
+        )
+        fig.add_bar(
+            name="Block-Adjusted GEX Est.",
+            x=nearby["strike"],
+            y=nearby["block_adjusted_gex_b"],
+            marker_color=colors,
+            opacity=0.72,
+            customdata=customdata,
+            hovertemplate=(
+                "Strike %{x:,.0f}<br>"
+                "Block-adjusted est. %{y:.2f}B<br>"
+                "Dominant total expiry: %{customdata[4]} (%{customdata[5]:.0%})<br>"
+                "Front 24h share: %{customdata[2]:.0%}<br>"
+                "Front 7d share: %{customdata[3]:.0%}"
+                "<extra>Block-adjusted GEX</extra>"
+            ),
+        )
     fig.add_vline(x=spot, line_color="#e4eadf", line_dash="dash")
     fig.update_layout(
         barmode="relative",
-        title="Strike GEX Map (Simple Approximation)",
+        title="Strike Gamma Map + Block-Adjusted Gamma Overlay",
         plot_bgcolor=APP_PANEL,
         paper_bgcolor=APP_BG,
         font_color=APP_TEXT,
@@ -2826,6 +3641,94 @@ def _build_expiry_map_chart(expiry_map: pd.DataFrame) -> go.Figure:
     )
     fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
     fig.update_yaxes(showgrid=True, gridcolor=APP_GRID, zeroline=False, linecolor=APP_BORDER)
+    return fig
+
+
+def _build_strike_expiry_heatmap(options_df: pd.DataFrame, spot: float) -> go.Figure:
+    fig = go.Figure()
+    if options_df.empty:
+        fig.update_layout(title="Strike x Expiry Gamma Heatmap")
+        return fig
+
+    nearby = options_df[(options_df["strike"] >= spot * 0.85) & (options_df["strike"] <= spot * 1.15)].copy()
+    if nearby.empty:
+        nearby = options_df.copy()
+    grouped = (
+        nearby.groupby(["expiration_ts", "expiry_label", "strike"], as_index=False)
+        .agg(
+            call_gex=("call_gex", "sum"),
+            put_gex=("put_gex", "sum"),
+            signed_gex=("signed_gex", "sum"),
+            abs_gex=("gex_abs", "sum"),
+            total_oi=("open_interest", "sum"),
+            hours_to_expiry=("hours_to_expiry", "min"),
+        )
+        .sort_values(["expiration_ts", "strike"])
+    )
+    if grouped.empty:
+        fig.update_layout(title="Strike x Expiry Gamma Heatmap")
+        return fig
+
+    grouped["expiry_display"] = grouped.apply(
+        lambda row: _display_expiry_label(row.get("expiry_label"), _safe_float(row.get("hours_to_expiry"))),
+        axis=1,
+    )
+    grouped["net_gex_b"] = grouped["signed_gex"] / 1000.0
+    grouped["call_gex_b"] = grouped["call_gex"] / 1000.0
+    grouped["put_gex_b"] = grouped["put_gex"] / 1000.0
+    grouped["hover_text"] = grouped.apply(
+        lambda row: (
+            f"Expiry {row['expiry_display']}<br>"
+            f"Strike {row['strike']:,.0f}<br>"
+            f"Net GEX {row['net_gex_b']:+.2f}B<br>"
+            f"Call GEX {row['call_gex_b']:.2f}B<br>"
+            f"Put GEX {row['put_gex_b']:.2f}B<br>"
+            f"OI {row['total_oi']:,.0f} BTC"
+        ),
+        axis=1,
+    )
+
+    x_values = sorted(grouped["strike"].unique())
+    y_order = (
+        grouped[["expiration_ts", "expiry_display"]]
+        .drop_duplicates()
+        .sort_values("expiration_ts")["expiry_display"]
+        .tolist()
+    )
+    z = grouped.pivot(index="expiry_display", columns="strike", values="net_gex_b").reindex(index=y_order, columns=x_values)
+    hover = grouped.pivot(index="expiry_display", columns="strike", values="hover_text").reindex(index=y_order, columns=x_values)
+    fig.add_heatmap(
+        x=x_values,
+        y=y_order,
+        z=z.to_numpy(),
+        text=hover.to_numpy(),
+        hovertemplate="%{text}<extra></extra>",
+        colorscale=[
+            [0.0, "#f472b6"],
+            [0.48, "#253021"],
+            [0.5, "#111811"],
+            [0.52, "#2d3b2b"],
+            [1.0, "#9fab95"],
+        ],
+        zmid=0.0,
+        colorbar=dict(title="Net GEX ($B)"),
+        xgap=1,
+        ygap=1,
+        hoverongaps=False,
+    )
+    fig.add_vline(x=spot, line_color="#e4eadf", line_dash="dash")
+    fig.update_layout(
+        title="Strike x Expiry Gamma Heatmap",
+        plot_bgcolor=APP_PANEL,
+        paper_bgcolor=APP_BG,
+        font_color=APP_TEXT,
+        margin=dict(l=30, r=30, t=60, b=35),
+        xaxis_title="Strike",
+        yaxis_title="Expiry",
+        height=380,
+    )
+    fig.update_xaxes(showgrid=False, linecolor=APP_BORDER)
+    fig.update_yaxes(showgrid=False, linecolor=APP_BORDER)
     return fig
 
 
@@ -3125,6 +4028,60 @@ def _jarvis_options_pressure_section(bundle: dict[str, object]) -> str:
     """
 
 
+def _jarvis_block_flow_section(bundle: dict[str, object]) -> str:
+    flow = bundle.get("block_flow_7d", {}) if isinstance(bundle.get("block_flow_7d", {}), dict) else {}
+    disagreements = bundle.get("block_disagreements", pd.DataFrame())
+    update = bundle.get("block_store_update", {}) if isinstance(bundle.get("block_store_update", {}), dict) else {}
+    matched = int(flow.get("matched_legs", 0) or 0)
+    blocks = int(flow.get("blocks", 0) or 0)
+    rfq = int(flow.get("rfq_trades", 0) or 0)
+    stored = int(flow.get("stored_trades", 0) or 0)
+    inserted = int(update.get("inserted", 0) or 0)
+    error = str(update.get("error", ""))
+
+    if matched <= 0:
+        status = (
+            f"No matched block-flow gamma estimate is available yet. Stored block legs: {stored:,}. "
+            "The page will improve as the local 30D block-trade store accumulates."
+        )
+        if error:
+            status += f" Latest Deribit block poll error: {error}"
+        return f"""
+            <h4>Block-Adjusted Gamma Map</h4>
+            <p>{escape(status)}</p>
+        """
+
+    confidence = "Medium" if rfq > 0 else "Medium-Low"
+    if isinstance(disagreements, pd.DataFrame) and not disagreements.empty:
+        items = []
+        for _, row in disagreements.iterrows():
+            strike = _safe_float(row.get("strike"))
+            raw = _format_gex_billions(_safe_float(row.get("signed_gex")), signed=True)
+            block = _format_gex_billions(_safe_float(row.get("block_adjusted_gex")), signed=True)
+            distance = _safe_float(row.get("distance_pct"))
+            rfq_count = int(_safe_float(row.get("rfq_trades")))
+            items.append(
+                f"<li><strong>{strike:,.0f}</strong> ({distance:+.2f}%): raw strike map {raw}, block-adjusted estimate {block}; RFQ legs {rfq_count}.</li>"
+            )
+        disagreement_copy = (
+            "<p><strong>Important disagreement:</strong> The raw strike map and recent block flow disagree at these strikes. "
+            "Treat those levels with lower confidence because institution-sized flow may be pointing to the opposite dealer-side exposure.</p>"
+            f"<ul>{''.join(items)}</ul>"
+        )
+    else:
+        disagreement_copy = (
+            "<p>No major nearby disagreement is visible between the raw strike map and the 7D block-adjusted estimate. "
+            "That raises confidence where block flow exists, but no-block strikes remain map-only.</p>"
+        )
+
+    return f"""
+        <h4>Block-Adjusted Gamma Map</h4>
+        <p><strong>Confidence: {escape(confidence)}.</strong> This is an estimate from Deribit block trades, not paid dealer inventory. Direction is interpreted as customer/aggressor side: buy = dealer short gamma, sell = dealer long gamma. Fresh inserted block legs this refresh: {inserted:,}.</p>
+        <p>7D matched block flow: {matched:,} legs across {blocks:,} blocks; RFQ-tagged legs: {rfq:,}. Total block-adjusted gamma estimate: {_format_gex_billions(_safe_float(flow.get("total_block_gex")), signed=True)}.</p>
+        {disagreement_copy}
+    """
+
+
 def _jarvis_plain_vwap_state(latest: pd.Series) -> tuple[str, str]:
     close = _safe_float(latest.get("close"))
     avwap = _safe_float(latest.get("avwap"))
@@ -3361,6 +4318,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         resistance_levels,
     )
     options_pressure_section = _jarvis_options_pressure_section(bundle)
+    block_flow_section = _jarvis_block_flow_section(bundle)
 
     return f"""
         <h4>Big Picture</h4>
@@ -3375,6 +4333,8 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
         <p>{escape(support_text)} {escape(resistance_text)}</p>
 
         {dealer_hedging_section}
+
+        {block_flow_section}
 
         {options_pressure_section}
 
@@ -3441,9 +4401,12 @@ def _render_btc_options_cockpit(anchor_mode: str):
         return
 
     spot = float(bundle["spot"])
+    options_df = bundle["options_df"]
     gamma_flip = bundle["gamma_flip"]
     perp = bundle["perp_snapshot"]
     strike_map = bundle["strike_map"]
+    strike_expiry_context = bundle.get("strike_expiry_context", strike_map)
+    strike_expiry_breakdown = bundle.get("strike_expiry_breakdown", pd.DataFrame())
     expiry_map = bundle["expiry_map"]
     atm_iv = bundle["atm_iv"]
     avwap_df = bundle["avwap_df"]
@@ -3458,6 +4421,10 @@ def _render_btc_options_cockpit(anchor_mode: str):
     risk_reversal = bundle["risk_reversal"]
     pressure_forecast = bundle["pressure_forecast"]
     history_comparison = bundle["history_comparison"]
+    block_flow_7d = bundle.get("block_flow_7d", {})
+    block_flow_30d = bundle.get("block_flow_30d", {})
+    block_store_update = bundle.get("block_store_update", {})
+    block_disagreements = bundle.get("block_disagreements", pd.DataFrame())
 
     st.title("BTC Options Screener")
     st.caption(
@@ -3488,26 +4455,55 @@ def _render_btc_options_cockpit(anchor_mode: str):
             f"{_safe_float(ibit.get('volume_ratio')):.2f}x its 20-day average as of {market_copy}. {str(ibit.get('flow_copy', ''))}"
         )
 
+    metric_help = {
+        "BTC Spot": "Current BTC reference price used to anchor option strikes, moneyness, and distance calculations.",
+        "OI 1H": "One-hour change in Binance BTCUSDT perpetual open interest; rising OI often means new leverage is entering.",
+        "Gamma Flip": "Estimated BTC price where dealer gamma exposure changes sign, often shifting hedging from stabilizing to amplifying moves.",
+        "Net GEX Approx": "Simple call-minus-put gamma exposure estimate across the visible Deribit option chain.",
+        "Front 24H GEX": "Absolute gamma exposure in options expiring within the next 24 hours.",
+        "Front 7D GEX": "Absolute gamma exposure in options expiring within the next seven days.",
+        "Pin Score": "How strongly nearby option gamma may pull BTC toward a candidate strike into expiry.",
+        "Funding 8H": "Latest eight-hour BTCUSDT perpetual funding rate; positive means longs pay shorts.",
+        "ATM IV": "At-the-money implied volatility for the nearest liquid BTC options expiry.",
+        "IV Term": "Front-expiry IV versus back-expiry IV; contango means back IV is higher, backwardation means front IV is higher.",
+        "Front RR": "Front-expiry risk reversal, comparing call IV to put IV; positive favors calls, negative favors puts.",
+        "Pressure Est.": "Estimated next hedging pressure bias from the current gamma and charm/vanna context.",
+        "7D Block GEX Est.": "Seven-day block-trade-adjusted gamma estimate from matched Deribit block option legs.",
+        "Block Legs": "Number of matched Deribit block option legs used in the seven-day block-flow estimate.",
+        "RFQ Legs": "Matched block legs tagged as RFQ, weighted as higher-confidence institutional flow.",
+        "30D Stored Blocks": "Number of distinct Deribit block trades currently stored in the local 30-day block-flow database.",
+    }
+
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("BTC Spot", f"{spot:,.2f}")
-    c2.metric("ATM IV", f"{float(atm_iv['effective_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a")
-    c3.metric("Net GEX Approx", _format_gex_billions(float(bundle["total_signed_gex"]), signed=True))
-    c4.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a")
-    c5.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}")
-    c6.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}")
+    c1.metric("BTC Spot", f"{spot:,.2f}", help=metric_help["BTC Spot"])
+    c2.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}", help=metric_help["OI 1H"])
+    c3.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a", help=metric_help["Gamma Flip"])
+    c4.metric("Net GEX Approx", _format_gex_billions(float(bundle["total_signed_gex"]), signed=True), help=metric_help["Net GEX Approx"])
+    c5.metric("Front 24H GEX", _format_gex_billions(float(front_24h["abs_gex"])), help=metric_help["Front 24H GEX"])
+    c6.metric("Front 7D GEX", _format_gex_billions(float(front_7d["abs_gex"])), help=metric_help["Front 7D GEX"])
 
     f1, f2, f3, f4, f5, f6 = st.columns(6)
-    f1.metric("Front 24H GEX", _format_gex_billions(float(front_24h["abs_gex"])))
-    f2.metric("Front 7D GEX", _format_gex_billions(float(front_7d["abs_gex"])))
-    f3.metric("Pin Score", f"{_safe_float(pin.get('pin_score')):.0f}/100")
-    f4.metric("IV Term", str(iv_term.get("term_regime", "n/a")), f"{_safe_float(iv_term.get('iv_ratio')):.2f}x")
-    f5.metric("Front RR", f"{_safe_float(risk_reversal['risk_reversal'].iloc[0]):+.2f}" if not risk_reversal.empty else "n/a")
-    f6.metric("Pressure Est.", str(pressure_forecast.get("pressure_bias", "Neutral")))
+    f1.metric("Pin Score", f"{_safe_float(pin.get('pin_score')):.0f}/100", help=metric_help["Pin Score"])
+    f2.metric("Funding 8H", f"{_safe_float(perp.get('last_funding_rate')):.4%}", help=metric_help["Funding 8H"])
+    f3.metric("ATM IV", f"{float(atm_iv['effective_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a", help=metric_help["ATM IV"])
+    f4.metric("IV Term", str(iv_term.get("term_regime", "n/a")), f"{_safe_float(iv_term.get('iv_ratio')):.2f}x", help=metric_help["IV Term"])
+    f5.metric("Front RR", f"{_safe_float(risk_reversal['risk_reversal'].iloc[0]):+.2f}" if not risk_reversal.empty else "n/a", help=metric_help["Front RR"])
+    f6.metric("Pressure Est.", str(pressure_forecast.get("pressure_bias", "Neutral")), help=metric_help["Pressure Est."])
+
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("7D Block GEX Est.", _format_gex_billions(_safe_float(block_flow_7d.get("total_block_gex")), signed=True), help=metric_help["7D Block GEX Est."])
+    b2.metric("Block Legs", f"{int(block_flow_7d.get('matched_legs', 0)):,}", f"+{int(block_store_update.get('inserted', 0)):,} new", help=metric_help["Block Legs"])
+    b3.metric("RFQ Legs", f"{int(block_flow_7d.get('rfq_trades', 0)):,}", help=metric_help["RFQ Legs"])
+    b4.metric("30D Stored Blocks", f"{int(block_flow_30d.get('blocks', 0)):,}", help=metric_help["30D Stored Blocks"])
 
     st.caption(
         f"{str(pin.get('pin_copy', 'No pin candidate.'))} "
         f"{str(iv_term.get('term_copy', ''))} "
         f"{str(pressure_forecast.get('pressure_copy', ''))}"
+    )
+    st.caption(
+        "Block-adjusted gamma is an estimate from Deribit block trades only. "
+        "Direction is interpreted as customer/aggressor side, RFQ-tagged legs get higher confidence, and strikes without block flow remain map-only."
     )
 
     s1, s2 = st.columns(2)
@@ -3525,9 +4521,77 @@ def _render_btc_options_cockpit(anchor_mode: str):
 
     chart_left, chart_right = st.columns(2)
     with chart_left:
-        st.plotly_chart(_build_gex_strike_chart(strike_map, spot), use_container_width=True)
+        st.plotly_chart(_build_gex_strike_chart(strike_expiry_context, spot), use_container_width=True)
     with chart_right:
         st.plotly_chart(_build_expiry_map_chart(expiry_map), use_container_width=True)
+
+    st.markdown("### Strike Expiry Breakdown")
+    if isinstance(strike_expiry_breakdown, pd.DataFrame) and not strike_expiry_breakdown.empty:
+        display_breakdown = strike_expiry_breakdown[
+            [
+                "strike",
+                "distance_pct",
+                "total_gex_b",
+                "call_gex_b",
+                "put_gex_b",
+                "net_gex_b",
+                "dominant_expiry",
+                "dominant_share",
+                "top_call_expiry",
+                "top_put_expiry",
+                "front_24h_share",
+                "front_7d_share",
+                "total_oi",
+            ]
+        ].copy()
+        for share_col in ["dominant_share", "front_24h_share", "front_7d_share"]:
+            display_breakdown[share_col] = display_breakdown[share_col] * 100.0
+        st.dataframe(
+            display_breakdown,
+            use_container_width=True,
+            height=320,
+            column_config={
+                "strike": st.column_config.NumberColumn("Strike", format="%.0f"),
+                "distance_pct": st.column_config.NumberColumn("Distance", format="%.2f%%"),
+                "total_gex_b": st.column_config.NumberColumn("Total GEX ($B)", format="%.2f"),
+                "call_gex_b": st.column_config.NumberColumn("Call GEX ($B)", format="%.2f"),
+                "put_gex_b": st.column_config.NumberColumn("Put GEX ($B)", format="%.2f"),
+                "net_gex_b": st.column_config.NumberColumn("Net GEX ($B)", format="%+.2f"),
+                "dominant_expiry": st.column_config.TextColumn("Dominant Expiry"),
+                "dominant_share": st.column_config.NumberColumn("Dominant Share", format="%.0f%%"),
+                "top_call_expiry": st.column_config.TextColumn("Top Call Expiry"),
+                "top_put_expiry": st.column_config.TextColumn("Top Put Expiry"),
+                "front_24h_share": st.column_config.NumberColumn("Front 24H", format="%.0f%%"),
+                "front_7d_share": st.column_config.NumberColumn("Front 7D", format="%.0f%%"),
+                "total_oi": st.column_config.NumberColumn("OI (BTC)", format="%.0f"),
+            },
+            hide_index=True,
+        )
+    else:
+        st.caption("No strike-expiry breakdown is available for the current options snapshot.")
+
+    st.plotly_chart(_build_strike_expiry_heatmap(options_df, spot), use_container_width=True)
+
+    if isinstance(block_disagreements, pd.DataFrame) and not block_disagreements.empty:
+        st.markdown("### Block Flow Disagreements")
+        display_disagreements = block_disagreements[
+            ["strike", "distance_pct", "signed_gex", "block_adjusted_gex", "block_abs_gex", "block_count", "rfq_trades"]
+        ].copy()
+        st.dataframe(
+            display_disagreements,
+            use_container_width=True,
+            height=180,
+            column_config={
+                "strike": st.column_config.NumberColumn("Strike", format="%.0f"),
+                "distance_pct": st.column_config.NumberColumn("Distance", format="%.2f%%"),
+                "signed_gex": st.column_config.NumberColumn("Raw Signed GEX", format="%.2f"),
+                "block_adjusted_gex": st.column_config.NumberColumn("Block GEX Est.", format="%.2f"),
+                "block_abs_gex": st.column_config.NumberColumn("Block Abs GEX", format="%.2f"),
+                "block_count": st.column_config.NumberColumn("Blocks", format="%d"),
+                "rfq_trades": st.column_config.NumberColumn("RFQ Legs", format="%d"),
+            },
+            hide_index=True,
+        )
 
     curve_col, flow_col = st.columns(2)
     with curve_col:
@@ -3543,6 +4607,9 @@ def _render_btc_options_cockpit(anchor_mode: str):
                 {"Metric": "Perp Mark / Index", "Value": f"{_safe_float(perp.get('mark_price')):,.2f} / {_safe_float(perp.get('index_price')):,.2f}"},
                 {"Metric": "Current OI Contracts", "Value": f"{_safe_float(perp.get('open_interest_contracts')):,.0f}"},
                 {"Metric": "OI Value (latest)", "Value": f"{float(bundle['oi_latest_value']):,.0f}"},
+                {"Metric": "7D Block GEX Estimate", "Value": _format_gex_billions(_safe_float(block_flow_7d.get("total_block_gex")), signed=True)},
+                {"Metric": "7D Block Legs / Blocks", "Value": f"{int(block_flow_7d.get('matched_legs', 0)):,} / {int(block_flow_7d.get('blocks', 0)):,}"},
+                {"Metric": "30D Stored Block Legs", "Value": f"{int(block_flow_30d.get('stored_trades', 0)):,}"},
             ]
         )
         st.markdown("### Options / Perp Snapshot")
@@ -4821,6 +5888,8 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
     aggregated = bubble_bundle["aggregated"]
     errors = bubble_bundle["errors"]
     aggregate_keys = bubble_bundle["aggregate_keys"]
+    premium_df = bubble_bundle.get("coinbase_premium", pd.DataFrame())
+    etf_tape = bubble_bundle.get("etf_tape", {})
 
     if bitcoin_mode == "Bitcoin Spot Vol (Binance)":
         source_key = "binance"
@@ -4842,22 +5911,31 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
         st.stop()
 
     latest = df.iloc[-1]
+    flow_summary = _spot_flow_summary(df, premium_df, etf_tape if isinstance(etf_tape, dict) else {})
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Bars", f"{len(df):,}")
     c2.metric("Latest Price", f"{latest['close']:,.2f}")
-    c3.metric("Latest Spot Volume", f"{latest['quote_volume']:,.0f}")
-    c4.metric("Volume State", str(latest["temperature"]))
+    c3.metric("Spot Flow", str(flow_summary["state"]))
+    c4.metric("Aggressor Imbalance", f"{_safe_float(latest.get('spot_imbalance')):+.1%}")
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Latest Spot Volume", f"{latest['quote_volume']:,.0f}")
+    c6.metric("Volume State", str(latest["temperature"]))
+    premium_latest = _safe_float(flow_summary.get("premium_latest"), np.nan)
+    c7.metric("Coinbase Premium", "n/a" if not np.isfinite(premium_latest) else f"{premium_latest:+.1f} bp")
+    etf_ratio = _safe_float(flow_summary.get("etf_proxy_ratio"), np.nan)
+    c8.metric("ETF Tape Proxy", "n/a" if not np.isfinite(etf_ratio) else f"{etf_ratio:+.1%}")
 
     st.caption(
-        f"Colors reflect {config['label']} spot-volume temperature from a rolling z-score window of "
-        f"{int(config['z_window'])} bars (about 30 days of context): "
-        "blue = Cooling, gray = Neutral, pink = Heating, red = Overheating."
+        f"Bubble size reflects {config['label']} total spot volume. When Binance taker flow is available, "
+        "bubble color reflects aggressive buyer/seller imbalance: green = buyers lifting offers, red = sellers hitting bids."
     )
+    st.caption(str(flow_summary["copy"]))
     if source_key == "aggregated":
         st.caption(
             "Aggregated view currently sums public spot data from: "
             + ", ".join(key.title() for key in aggregate_keys)
-            + ". Hyperliquid spot is not included in this first version."
+            + ". Aggressor color uses Binance taker-buy/taker-sell flow when present."
         )
     elif source_key in errors:
         st.caption(f"Fetch note for {source_key}: {errors[source_key]}")
@@ -4865,7 +5943,41 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
     fig = _build_bitcoin_bubble_chart(df, title)
     st.plotly_chart(fig, use_container_width=True)
 
-    detail_df = df[["ts", "close", "quote_volume", "volume_z", "temperature"]].copy()
+    if "spot_cvd" in df.columns and df["spot_cvd"].notna().any():
+        st.plotly_chart(_build_spot_cvd_chart(df), use_container_width=True)
+    else:
+        st.info("Spot CVD is only available on Binance or aggregated views that include Binance taker-flow data.")
+
+    if not premium_df.empty:
+        st.plotly_chart(_build_coinbase_premium_chart(premium_df.tail(len(df))), use_container_width=True)
+    else:
+        st.info("Coinbase premium is unavailable right now because either Binance or Coinbase spot data did not load.")
+
+    etf_df = etf_tape.get("data", pd.DataFrame()) if isinstance(etf_tape, dict) else pd.DataFrame()
+    etf_error = etf_tape.get("error", "") if isinstance(etf_tape, dict) else ""
+    if isinstance(etf_df, pd.DataFrame) and not etf_df.empty:
+        st.plotly_chart(_build_etf_tape_chart(etf_df), use_container_width=True)
+        st.caption(
+            "ETF tape uses EODHD daily OHLCV for IBIT, FBTC, ARKB, and BITB. It is a signed-volume demand proxy, "
+            "not official ETF creation/redemption net flow."
+        )
+    elif etf_error:
+        st.info(etf_error)
+
+    detail_cols = [
+        "ts",
+        "close",
+        "quote_volume",
+        "aggressive_buy_volume",
+        "aggressive_sell_volume",
+        "spot_imbalance",
+        "spot_delta",
+        "spot_cvd",
+        "volume_z",
+        "temperature",
+        "flow_state",
+    ]
+    detail_df = df[[col for col in detail_cols if col in df.columns]].copy()
     ts_format = "%Y-%m-%d" if bubble_timeframe == "1D" else "%Y-%m-%d %H:%M"
     detail_df["ts"] = detail_df["ts"].dt.strftime(ts_format)
     st.dataframe(
@@ -4876,8 +5988,14 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
             "ts": st.column_config.TextColumn("Date"),
             "close": st.column_config.NumberColumn("BTC Price", format="%.2f"),
             "quote_volume": st.column_config.NumberColumn("Spot Volume (USD)", format="%.0f"),
+            "aggressive_buy_volume": st.column_config.NumberColumn("Agg Buy Vol", format="%.0f"),
+            "aggressive_sell_volume": st.column_config.NumberColumn("Agg Sell Vol", format="%.0f"),
+            "spot_imbalance": st.column_config.NumberColumn("Agg Imbal", format="%.2f"),
+            "spot_delta": st.column_config.NumberColumn("Spot Delta", format="%.0f"),
+            "spot_cvd": st.column_config.NumberColumn("Spot CVD", format="%.0f"),
             "volume_z": st.column_config.NumberColumn("Volume Z", format="%.2f"),
             "temperature": st.column_config.TextColumn("State"),
+            "flow_state": st.column_config.TextColumn("Flow"),
         },
         hide_index=True,
     )

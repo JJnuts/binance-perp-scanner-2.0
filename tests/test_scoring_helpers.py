@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -203,6 +205,21 @@ class ScoringHelperTests(unittest.TestCase):
         self.assertGreater(pin["pin_score"], 0.0)
         self.assertEqual(pin["pin_strike"], 100.0)
 
+    def test_strike_expiry_context_adds_hover_and_table_fields(self):
+        options = self._sample_options_df()
+        strike_map = scanner._strike_map_for_options(options)
+
+        context = scanner._strike_expiry_context(options, strike_map, 100.0)
+        breakdown = scanner._strike_expiry_breakdown_table(options, 100.0)
+
+        row = context[context["strike"] == 100.0].iloc[0]
+        self.assertIn("0DTE", row["call_expiry_hover"])
+        self.assertIn("0DTE", row["put_expiry_hover"])
+        self.assertAlmostEqual(row["front_24h_share"], 1.0 / 3.0)
+        self.assertFalse(breakdown.empty)
+        self.assertIn("top_call_expiry", breakdown.columns)
+        self.assertIn("front_7d_share", breakdown.columns)
+
     def test_risk_reversal_and_term_structure(self):
         options = self._sample_options_df()
         rr = scanner._risk_reversal_by_expiry(options)
@@ -225,6 +242,121 @@ class ScoringHelperTests(unittest.TestCase):
 
         self.assertIn("Estimated", pressure["pressure_copy"])
         self.assertIn(pressure["pressure_bias"], {"Upside pressure", "Downside pressure", "Neutral"})
+
+    def test_prepare_bubble_frame_adds_spot_flow_fields(self):
+        df = pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=12, freq="1D"),
+                "close": [100.0 + i for i in range(12)],
+                "quote_volume": [1000.0 + i * 100.0 for i in range(12)],
+                "aggressive_buy_volume": [650.0 + i * 10.0 for i in range(12)],
+                "aggressive_sell_volume": [350.0 + i * 5.0 for i in range(12)],
+                "source": "Binance spot",
+            }
+        )
+
+        out = scanner._prepare_bubble_frame(df, z_window=10)
+
+        self.assertIn("spot_imbalance", out)
+        self.assertIn("spot_cvd", out)
+        self.assertIn("flow_state", out)
+        self.assertGreater(out["spot_imbalance"].iloc[-1], 0.0)
+        self.assertEqual(out["flow_state"].iloc[-1], "Strong Buy")
+
+    def test_coinbase_premium_frame_computes_basis_points(self):
+        idx = pd.date_range("2026-01-01", periods=3, freq="1D")
+        binance = pd.DataFrame({"ts": idx, "close": [100.0, 100.0, 100.0]})
+        coinbase = pd.DataFrame({"ts": idx, "close": [101.0, 99.0, 100.5]})
+
+        premium = scanner._coinbase_premium_frame(binance, coinbase)
+
+        self.assertEqual(len(premium), 3)
+        self.assertAlmostEqual(premium["coinbase_premium_bp"].iloc[0], 100.0)
+        self.assertAlmostEqual(premium["coinbase_premium_bp"].iloc[1], -100.0)
+
+    def test_spot_flow_summary_detects_accumulation(self):
+        df = pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=8, freq="1D"),
+                "close": [100.0, 100.1, 100.0, 100.2, 100.1, 100.2, 100.1, 100.2],
+                "spot_cvd": [0.0, 100.0, 220.0, 340.0, 460.0, 600.0, 750.0, 900.0],
+                "spot_imbalance": [0.12] * 8,
+                "flow_state": ["Buy"] * 8,
+            }
+        )
+
+        summary = scanner._spot_flow_summary(df, pd.DataFrame(), {"summary": {"latest_proxy_ratio": 0.2}})
+
+        self.assertEqual(summary["state"], "Accumulation")
+        self.assertGreater(summary["cvd_delta"], 0.0)
+
+    def test_block_flow_gamma_map_signs_customer_direction(self):
+        original_path = scanner.BTC_OPTIONS_BLOCK_DB_PATH
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                scanner.BTC_OPTIONS_BLOCK_DB_PATH = Path(tmpdir) / "blocks.sqlite"
+                now_ms = int(scanner._utc_now_naive().timestamp() * 1000)
+                scanner._store_deribit_block_trades(
+                    [
+                        {
+                            "trade_id": "t1",
+                            "block_trade_id": "b1",
+                            "block_rfq_id": "rfq1",
+                            "timestamp": now_ms,
+                            "instrument_name": "BTC-30MAY26-100000-C",
+                            "direction": "buy",
+                            "amount": 2.0,
+                            "price": 0.01,
+                            "mark_price": 0.01,
+                            "iv": 50.0,
+                            "index_price": 100000.0,
+                            "block_trade_leg_count": 1,
+                        },
+                        {
+                            "trade_id": "t2",
+                            "block_trade_id": "b2",
+                            "timestamp": now_ms,
+                            "instrument_name": "BTC-30MAY26-90000-P",
+                            "direction": "sell",
+                            "amount": 1.0,
+                            "price": 0.01,
+                            "mark_price": 0.01,
+                            "iv": 55.0,
+                            "index_price": 100000.0,
+                            "block_trade_leg_count": 1,
+                        },
+                    ]
+                )
+                options = pd.DataFrame(
+                    [
+                        {
+                            "instrument_name": "BTC-30MAY26-100000-C",
+                            "strike": 100000.0,
+                            "option_type": "call",
+                            "gamma": 0.0001,
+                            "contract_size": 1.0,
+                            "underlying_price": 100000.0,
+                        },
+                        {
+                            "instrument_name": "BTC-30MAY26-90000-P",
+                            "strike": 90000.0,
+                            "option_type": "put",
+                            "gamma": 0.0001,
+                            "contract_size": 1.0,
+                            "underlying_price": 100000.0,
+                        },
+                    ]
+                )
+
+                flow = scanner._block_flow_gamma_map(options, days=7)
+                block_map = flow["strike_map"].set_index("strike")
+
+                self.assertLess(block_map.loc[100000.0, "block_adjusted_gex"], 0.0)
+                self.assertGreater(block_map.loc[90000.0, "block_adjusted_gex"], 0.0)
+                self.assertEqual(flow["matched_legs"], 2)
+                self.assertEqual(flow["rfq_trades"], 1)
+        finally:
+            scanner.BTC_OPTIONS_BLOCK_DB_PATH = original_path
 
 
 if __name__ == "__main__":
