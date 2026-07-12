@@ -1055,6 +1055,7 @@ def _fetch_klines_interval(symbol: str, interval: str, limit: int) -> Optional[p
     for col in ("open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"):
         df[col] = df[col].astype(float)
 
+    df = _drop_unclosed_by_close_ts(df)
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     return df.set_index("ts")[["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"]]
 
@@ -1089,6 +1090,7 @@ def _fetch_spot_klines_interval(symbol: str, interval: str, limit: int) -> Optio
     df["ts"] = pd.to_datetime(df["open_time"], unit="ms")
     for col in ("open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"):
         df[col] = df[col].astype(float)
+    df = _drop_unclosed_by_close_ts(df, close_col="close_time")
     return df.set_index("ts")[["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"]]
 
 
@@ -1865,6 +1867,41 @@ def _interval_to_timedelta(interval: str) -> pd.Timedelta:
     raise ValueError(f"Unsupported interval: {interval}")
 
 
+def _epoch_ms_now() -> int:
+    return int(pd.Timestamp.now(tz="UTC").value // 10**6)
+
+
+def _drop_unclosed_by_close_ts(df: pd.DataFrame, close_col: str = "close_ts") -> pd.DataFrame:
+    """Keep only bars whose exchange-reported close timestamp has passed.
+
+    Signals must never be computed on the in-progress candle: its volume,
+    range, and taker fields are partial, which depresses z-scores early in
+    the bar and makes triggers flicker at rollover.
+    """
+    if df.empty or close_col not in df.columns:
+        return df
+    closed = pd.to_numeric(df[close_col], errors="coerce").fillna(0).astype(np.int64) <= _epoch_ms_now()
+    return df[closed]
+
+
+def _drop_unclosed_by_interval(df: pd.DataFrame, duration: pd.Timedelta, ts_col: str = "ts") -> pd.DataFrame:
+    """Keep only bars whose open time + interval duration has fully elapsed."""
+    if df.empty or ts_col not in df.columns:
+        return df
+    return df[df[ts_col] + duration <= _utc_now_naive()]
+
+
+def _bybit_interval_to_timedelta(interval: str) -> pd.Timedelta:
+    interval = str(interval).strip().upper()
+    if interval == "D":
+        return pd.Timedelta(days=1)
+    if interval == "W":
+        return pd.Timedelta(weeks=1)
+    if interval == "M":
+        return pd.Timedelta(days=30)
+    return pd.Timedelta(minutes=int(interval))
+
+
 def _resample_spot_frame(df: pd.DataFrame, rule: Optional[str], source_name: str) -> pd.DataFrame:
     out = df.sort_values("ts").copy()
     agg_map = {"close": ("close", "last"), "quote_volume": ("quote_volume", "sum")}
@@ -1880,6 +1917,9 @@ def _resample_spot_frame(df: pd.DataFrame, rule: Optional[str], source_name: str
             .dropna()
             .reset_index()
         )
+        # The final resampled bucket may span into the future (e.g. a 12h
+        # bucket built from 4h bars); drop it until it is fully formed.
+        out = _drop_unclosed_by_interval(out, pd.Timedelta(rule))
     out["source"] = source_name
     cols = ["ts", "close", "quote_volume", "source"]
     for col in ("aggressive_buy_volume", "aggressive_sell_volume"):
@@ -2114,8 +2154,8 @@ def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
         raw = _get_json_url("https://api.binance.com/api/v3/klines", params=params, timeout=20)
         if not raw:
             break
-        chunk = pd.DataFrame(raw).iloc[:, [0, 4, 7, 10]].copy()
-        chunk.columns = ["ts", "close", "quote_volume", "aggressive_buy_volume"]
+        chunk = pd.DataFrame(raw).iloc[:, [0, 4, 6, 7, 10]].copy()
+        chunk.columns = ["ts", "close", "close_ts", "quote_volume", "aggressive_buy_volume"]
         chunks.append(chunk)
         first_open = int(chunk.iloc[0]["ts"])
         end_time = first_open - interval_ms
@@ -2127,6 +2167,7 @@ def _fetch_binance_spot_btc(limit: int, interval: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["ts", "close", "quote_volume", "source"])
 
     df = pd.concat(chunks, ignore_index=True).drop_duplicates(subset=["ts"]).sort_values("ts")
+    df = _drop_unclosed_by_close_ts(df).drop(columns=["close_ts"])
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
@@ -2167,6 +2208,7 @@ def _fetch_coinbase_spot_btc(limit: int, granularity: int, rule: Optional[str]) 
 
     df = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["ts"])
     df["ts"] = pd.to_datetime(df["ts"], unit="s")
+    df = _drop_unclosed_by_interval(df, pd.Timedelta(seconds=granularity))
     df["close"] = df["close"].astype(float)
     df["base_volume"] = df["base_volume"].astype(float)
     df["quote_volume"] = df["close"] * df["base_volume"]
@@ -2183,6 +2225,7 @@ def _fetch_bybit_spot_btc(limit: int, interval: str, rule: Optional[str]) -> pd.
     rows = raw.get("result", {}).get("list", [])
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "base_volume", "quote_volume"])
     df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
+    df = _drop_unclosed_by_interval(df, _bybit_interval_to_timedelta(interval))
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
     df = _resample_spot_frame(df[["ts", "close", "quote_volume"]], rule, "Bybit spot")
@@ -2200,6 +2243,7 @@ def _fetch_okx_spot_btc(limit: int, bar: str, rule: Optional[str]) -> pd.DataFra
         rows,
         columns=["ts", "open", "high", "low", "close", "base_volume", "volume_ccy", "quote_volume", "confirm"],
     )
+    df = df[df["confirm"].astype(str) == "1"]
     df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="ms")
     df["close"] = df["close"].astype(float)
     df["quote_volume"] = df["quote_volume"].astype(float)
@@ -2219,6 +2263,7 @@ def _fetch_kraken_spot_btc(limit: int, interval: int, rule: Optional[str]) -> pd
         columns=["ts", "open", "high", "low", "close", "vwap", "base_volume", "count"],
     )
     df["ts"] = pd.to_datetime(df["ts"].astype(np.int64), unit="s")
+    df = _drop_unclosed_by_interval(df, pd.Timedelta(minutes=int(interval)))
     df["close"] = df["close"].astype(float)
     df["vwap"] = df["vwap"].astype(float)
     df["base_volume"] = df["base_volume"].astype(float)
@@ -2609,6 +2654,7 @@ def _fetch_binance_btc_perp_klines(interval: str = "5m", limit: int = BTC_OPTION
     )
     for col in ["open", "high", "low", "close", "base_vol", "quote_vol", "taker_buy_base", "taker_buy_quote"]:
         df[col] = df[col].astype(float)
+    df = _drop_unclosed_by_close_ts(df)
     df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_localize(None)
     df["trades"] = df["trades"].astype(int)
     return df

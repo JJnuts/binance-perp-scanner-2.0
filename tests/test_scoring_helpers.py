@@ -359,5 +359,69 @@ class ScoringHelperTests(unittest.TestCase):
             scanner.BTC_OPTIONS_BLOCK_DB_PATH = original_path
 
 
+class ClosedBarTests(unittest.TestCase):
+    def test_drop_unclosed_by_close_ts_removes_in_progress_bar(self):
+        now_ms = scanner._epoch_ms_now()
+        df = pd.DataFrame(
+            {
+                "close": [1.0, 2.0, 3.0],
+                "close_ts": [now_ms - 120_000, now_ms - 60_000, now_ms + 240_000],
+            }
+        )
+
+        out = scanner._drop_unclosed_by_close_ts(df)
+
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out["close"].tolist(), [1.0, 2.0])
+
+    def test_drop_unclosed_by_close_ts_keeps_all_closed_bars(self):
+        now_ms = scanner._epoch_ms_now()
+        df = pd.DataFrame({"close": [1.0, 2.0], "close_ts": [now_ms - 120_000, now_ms - 1_000]})
+
+        self.assertEqual(len(scanner._drop_unclosed_by_close_ts(df)), 2)
+
+    def test_drop_unclosed_by_interval_removes_partial_bucket(self):
+        now = scanner._utc_now_naive()
+        df = pd.DataFrame(
+            {
+                "ts": [now - pd.Timedelta(hours=24), now - pd.Timedelta(hours=12), now - pd.Timedelta(hours=3)],
+                "close": [1.0, 2.0, 3.0],
+            }
+        )
+
+        out = scanner._drop_unclosed_by_interval(df, pd.Timedelta(hours=12))
+
+        self.assertEqual(out["close"].tolist(), [1.0, 2.0])
+
+    def test_bybit_interval_to_timedelta(self):
+        self.assertEqual(scanner._bybit_interval_to_timedelta("D"), pd.Timedelta(days=1))
+        self.assertEqual(scanner._bybit_interval_to_timedelta("720"), pd.Timedelta(hours=12))
+        self.assertEqual(scanner._bybit_interval_to_timedelta("240"), pd.Timedelta(hours=4))
+
+    def test_fetch_klines_interval_drops_unclosed_candle(self):
+        now_ms = scanner._epoch_ms_now()
+        bar_ms = 60 * 60 * 1000
+        rows = []
+        for i in range(60, 0, -1):
+            open_ms = now_ms - i * bar_ms
+            rows.append(
+                [open_ms, "1.0", "1.1", "0.9", "1.0", "10.0", open_ms + bar_ms - 1, "100.0", 50, "5.0", "50.0", "0"]
+            )
+        # In-progress candle: opened in the past, closes in the future.
+        rows.append([now_ms, "1.0", "1.2", "0.9", "1.1", "3.0", now_ms + bar_ms - 1, "30.0", 9, "2.0", "15.0", "0"])
+
+        original_get_json = scanner._get_json
+        scanner._get_json = lambda path, params=None, timeout=scanner.API_TIMEOUT: rows
+        try:
+            df = scanner._fetch_klines_interval("TESTUSDT", "1h", 240)
+        finally:
+            scanner._get_json = original_get_json
+
+        self.assertIsNotNone(df)
+        self.assertEqual(len(df), 60)
+        # The last remaining bar must be a fully closed one.
+        self.assertEqual(float(df["quote_vol"].iloc[-1]), 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()
