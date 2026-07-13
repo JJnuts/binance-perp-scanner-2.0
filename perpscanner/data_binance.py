@@ -120,15 +120,50 @@ def _fetch_spot_klines_interval(symbol: str, interval: str, limit: int) -> Optio
         df[col] = df[col].astype(float)
     df = _drop_unclosed_by_close_ts(df, close_col="close_time")
     return df.set_index("ts")[["open", "high", "low", "close", "vol", "quote_vol", "trades", "tb_quote"]]
+# Multiplied perps (1000PEPEUSDT, 1MBABYDOGEUSDT, 1000000MOGUSDT, ...)
+# often have no spot market under the same name, which silently killed
+# their basis confirmation. Longest prefix first so 1000000 is not
+# swallowed by 1000.
+_SPOT_PREFIX_MULTIPLIERS = (("1000000", 1_000_000.0), ("1000", 1_000.0), ("1M", 1_000_000.0))
+
+
+def _spot_equivalent(symbol: str) -> tuple[str, float]:
+    """Fallback spot symbol and price multiplier for a multiplied perp."""
+    base = symbol[:-4] if symbol.endswith("USDT") else symbol
+    for prefix, multiplier in _SPOT_PREFIX_MULTIPLIERS:
+        if base.startswith(prefix) and len(base) > len(prefix):
+            return f"{base[len(prefix):]}USDT", multiplier
+    return symbol, 1.0
+
+
+def _scale_spot_frame(df: pd.DataFrame, multiplier: float) -> pd.DataFrame:
+    if multiplier == 1.0:
+        return df
+    out = df.copy()
+    for col in ("open", "high", "low", "close"):
+        out[col] = out[col] * multiplier
+    out["vol"] = out["vol"] / multiplier  # base units shrink as price scales
+    return out
+
+
 def _fetch_ltf_spot_symbol_context(symbol: str) -> tuple[str, dict[str, pd.DataFrame]]:
     klines: dict[str, pd.DataFrame] = {}
+    fallback_symbol, fallback_multiplier = _spot_equivalent(symbol)
+    candidates = [(symbol, 1.0)]
+    if fallback_symbol != symbol:
+        candidates.append((fallback_symbol, fallback_multiplier))
+    resolved: Optional[tuple[str, float]] = None  # first candidate that served data wins
     for interval in LTF_INTERVALS:
-        try:
-            df = _fetch_spot_klines_interval(symbol, interval, LTF_KLINE_LIMITS[interval])
+        attempts = [resolved] if resolved else candidates
+        for name, multiplier in attempts:
+            try:
+                df = _fetch_spot_klines_interval(name, interval, LTF_KLINE_LIMITS[interval])
+            except Exception:
+                df = None
             if df is not None and not df.empty:
-                klines[interval] = df
-        except Exception:
-            continue
+                resolved = (name, multiplier)
+                klines[interval] = _scale_spot_frame(df, multiplier)
+                break
     return symbol, klines
 @st.cache_data(ttl=LTF_CACHE_TTL, show_spinner=False)
 def fetch_ltf_spot_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:

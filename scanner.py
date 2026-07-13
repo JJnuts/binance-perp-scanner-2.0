@@ -162,6 +162,8 @@ from perpscanner.data_binance import (  # noqa: F401
     _fetch_open_interest_hist_frame,
     _fetch_open_interest_hist,
     _oi_context_from_frame,
+    _spot_equivalent,
+    _scale_spot_frame,
     _fetch_funding_history,
     _premium_snapshot_from_raw,
     _premium_roc_from_history,

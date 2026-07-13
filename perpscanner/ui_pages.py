@@ -832,6 +832,51 @@ def _render_ltf_scalping_dashboard(
         st.plotly_chart(fig, use_container_width=True)
     _show_ltf_ignition_table(ignition_df.head(top_n))
 
+    # The binary table above only shows fired triggers; the continuous
+    # conviction score exists precisely to rank the names that are
+    # building toward one, so give it its own board.
+    if not ltf_df.empty and "conviction_net" in ltf_df.columns:
+        with st.expander(f"Conviction watch - top {top_n} by continuous trigger score (incl. non-fired names)"):
+            watch = ltf_df.reindex(
+                ltf_df["conviction_net"].abs().sort_values(ascending=False).index
+            ).head(top_n)
+            watch_cols = [
+                "symbol",
+                "ignition_tf",
+                "conviction_net",
+                "veto_side",
+                "confluence_long",
+                "confluence_short",
+                "ltf_ignition_score",
+                "volume_zscore",
+                "oi_zscore",
+                "trigger_fresh",
+                "bars_since_trigger",
+            ]
+            st.dataframe(
+                watch[[c for c in watch_cols if c in watch.columns]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "symbol": st.column_config.TextColumn("Symbol"),
+                    "ignition_tf": st.column_config.TextColumn("TF"),
+                    "conviction_net": st.column_config.NumberColumn("Conviction", format="%.2f", help=_term_help("Conviction")),
+                    "veto_side": st.column_config.TextColumn("Veto Side"),
+                    "confluence_long": st.column_config.NumberColumn("Confl Long", format="%.2f"),
+                    "confluence_short": st.column_config.NumberColumn("Confl Short", format="%.2f"),
+                    "ltf_ignition_score": st.column_config.NumberColumn("Ignition", format="%.1f"),
+                    "volume_zscore": st.column_config.NumberColumn("Vol Z", format="%.2f"),
+                    "oi_zscore": st.column_config.NumberColumn("OI Z", format="%.2f"),
+                    "trigger_fresh": st.column_config.CheckboxColumn("Fired"),
+                    "bars_since_trigger": st.column_config.NumberColumn("Age", format="%d"),
+                },
+                height=360,
+            )
+            st.caption(
+                "Positive conviction leans long, negative leans short; a name with high conviction and "
+                "an active veto side is one confirmation away from firing. Sized by |conviction|."
+            )
+
     st.divider()
     _render_classic_altcoin_dashboard(df, "LTF Scalping", min_score, max_overextension_score, top_n, view)
 def _render_htf_momentum_dashboard(

@@ -522,6 +522,63 @@ class ClosedBarTests(unittest.TestCase):
         self.assertEqual(float(df["quote_vol"].iloc[-1]), 100.0)
 
 
+class LtfSpotMappingTests(unittest.TestCase):
+    def test_spot_equivalent_maps_multiplied_perps(self):
+        self.assertEqual(scanner._spot_equivalent("1000PEPEUSDT"), ("PEPEUSDT", 1000.0))
+        self.assertEqual(scanner._spot_equivalent("1MBABYDOGEUSDT"), ("BABYDOGEUSDT", 1_000_000.0))
+        self.assertEqual(scanner._spot_equivalent("1000000MOGUSDT"), ("MOGUSDT", 1_000_000.0))
+        # Plain symbols map to themselves.
+        self.assertEqual(scanner._spot_equivalent("BTCUSDT"), ("BTCUSDT", 1.0))
+        self.assertEqual(scanner._spot_equivalent("ETHUSDT"), ("ETHUSDT", 1.0))
+
+    def test_scale_spot_frame_keeps_basis_math_exact(self):
+        df = pd.DataFrame(
+            {
+                "open": [0.001], "high": [0.0011], "low": [0.0009], "close": [0.001],
+                "vol": [1_000_000.0], "quote_vol": [1000.0], "trades": [10.0], "tb_quote": [500.0],
+            }
+        )
+
+        scaled = scanner._scale_spot_frame(df, 1000.0)
+
+        self.assertAlmostEqual(float(scaled["close"].iloc[0]), 1.0)
+        self.assertAlmostEqual(float(scaled["vol"].iloc[0]), 1000.0)
+        self.assertAlmostEqual(float(scaled["quote_vol"].iloc[0]), 1000.0)  # quote units untouched
+        # Multiplier 1.0 must be a no-op passthrough.
+        self.assertIs(scanner._scale_spot_frame(df, 1.0), df)
+
+    def test_ltf_spot_context_falls_back_to_stripped_symbol(self):
+        from perpscanner import data_binance
+
+        idx_ms = 1_700_000_000_000
+        closed_ms = scanner._epoch_ms_now() - 60_000
+
+        def fake_get_json_url(url, params=None, headers=None, timeout=15):
+            params = params or {}
+            if params.get("symbol") == "1000FAKEUSDT":
+                raise RuntimeError("400 invalid symbol")
+            rows = []
+            for i in range(70):
+                open_ms = idx_ms + i * 300_000
+                rows.append(
+                    [open_ms, "0.001", "0.0011", "0.0009", "0.001", "1000000.0",
+                     closed_ms, "1000.0", 10, "500000.0", "500.0", "0"]
+                )
+            return rows
+
+        original = data_binance._get_json_url
+        data_binance._get_json_url = fake_get_json_url
+        try:
+            symbol, klines = data_binance._fetch_ltf_spot_symbol_context("1000FAKEUSDT")
+        finally:
+            data_binance._get_json_url = original
+
+        self.assertEqual(symbol, "1000FAKEUSDT")
+        self.assertEqual(set(klines), set(scanner.LTF_INTERVALS))
+        # Spot close must be rescaled into the perp's 1000x price space.
+        self.assertAlmostEqual(float(klines["5m"]["close"].iloc[-1]), 1.0)
+
+
 class BtcScreenerTests(unittest.TestCase):
     def test_positioning_cards_survive_empty_sweeps(self):
         # Regression: latest_sweep was None with empty sweeps and the
