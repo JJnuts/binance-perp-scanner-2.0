@@ -219,6 +219,7 @@ from perpscanner.features_htf import (  # noqa: F401
     _btc_daily_regime,
 )
 from perpscanner.options_analytics import (  # noqa: F401
+    _avwap_fetch_plan,
     _choose_anchor_timestamp,
     _build_anchored_vwap_frame,
     _detect_recent_sweeps,

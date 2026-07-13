@@ -35,6 +35,16 @@ from .data_deribit import (
 )
 
 
+def _avwap_fetch_plan(anchor_mode: str) -> tuple[str, int]:
+    """Kline interval/limit that can actually reach the requested anchor.
+
+    The old fixed 576x5m fetch held 48 hours - a weekly open was
+    unreachable from Wednesday onward and a monthly open almost always,
+    so those anchor modes silently degraded to a rolling-window anchor.
+    """
+    if anchor_mode == "Monthly Open":
+        return "15m", 3100  # ~32 days of 15m bars
+    return "5m", 2400  # ~8.3 days: covers the weekly open + prior-24h modes
 def _choose_anchor_timestamp(df: pd.DataFrame, anchor_mode: str) -> pd.Timestamp:
     ts = df["ts"]
     latest = ts.iloc[-1]
@@ -390,7 +400,17 @@ def _history_comparison(history: pd.DataFrame, current: dict[str, object]) -> di
         return {"history_rows": int(len(history)), "gex_vs_30d_median": 0.0, "oi_24h_delta": 0.0, "rr_zscore": 0.0, "iv_change_points": 0.0}
     latest_ts = pd.to_datetime(current["ts"])
     prior_24h = history[history["ts"] <= latest_ts - pd.Timedelta(hours=24)]
-    gex_median = float(history.tail(30)["total_abs_gex"].median()) if "total_abs_gex" in history else 0.0
+    # Snapshots land every cache refresh (~minutes apart), so tail(30) of
+    # raw rows is a couple of HOURS, not 30 days. Collapse to one snapshot
+    # per day first so the median actually spans up to 30 days.
+    gex_median = 0.0
+    if "total_abs_gex" in history:
+        daily_gex = (
+            history.assign(day=history["ts"].dt.normalize())
+            .groupby("day")["total_abs_gex"]
+            .last()
+        )
+        gex_median = float(daily_gex.tail(30).median())
     oi_delta = 0.0
     iv_change = 0.0
     if not prior_24h.empty:
@@ -461,12 +481,15 @@ def _block_flow_gamma_map(options_df: pd.DataFrame, days: int = BLOCK_FLOW_PRIMA
     matched["dealer_sign"] = np.where(matched["direction"].str.lower() == "buy", -1.0, 1.0)
     matched["rfq_weight"] = np.where(matched["block_rfq_id"].notna() & (matched["block_rfq_id"].astype(str) != ""), BLOCK_RFQ_WEIGHT, 1.0)
     matched["underlying_for_gex"] = matched["underlying_price"].replace(0.0, np.nan).fillna(matched["index_price"])
+    # Same per-1%-move convention as options_df["gex_abs"] so block flow
+    # stays directly comparable with the chain-wide strike map.
     matched["leg_gex_abs"] = (
         matched["gamma"].abs()
         * matched["amount"].abs()
         * matched["underlying_for_gex"].replace(0.0, np.nan).fillna(0.0)
         * matched["underlying_for_gex"].replace(0.0, np.nan).fillna(0.0)
         * matched["contract_size"].replace(0.0, 1.0).fillna(1.0)
+        * 0.01
         / 1_000_000.0
     )
     matched["block_adjusted_gex"] = matched["dealer_sign"] * matched["leg_gex_abs"] * matched["rfq_weight"]
@@ -618,12 +641,17 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     if spot <= 0.0:
         return {"error": "Could not determine a BTC spot reference from Deribit or Binance."}
 
+    # Dollar gamma per 1% underlying move, in millions:
+    # gamma (per $1) x OI x S^2 x 0.01. Without the 0.01 the headline
+    # numbers run ~100x the per-1% convention used by every external GEX
+    # source, which made them impossible to sanity-check against anyone.
     options_df["gex_abs"] = (
         options_df["gamma"].abs()
         * options_df["open_interest"]
         * options_df["underlying_price"].replace(0.0, spot).fillna(spot)
         * options_df["underlying_price"].replace(0.0, spot).fillna(spot)
         * options_df["contract_size"]
+        * 0.01
         / 1_000_000.0
     )
     options_df["call_gex"] = np.where(options_df["option_type"] == "call", options_df["gex_abs"], 0.0)
@@ -695,7 +723,8 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     history_comparison = _history_comparison(history, history_row)
     pressure_forecast = _pressure_forecast(options_df, _safe_float(history_comparison.get("iv_change_points")))
 
-    klines = _fetch_binance_btc_perp_klines()
+    avwap_interval, avwap_limit = _avwap_fetch_plan(anchor_mode)
+    klines = _fetch_binance_btc_perp_klines(avwap_interval, avwap_limit)
     oi_hist = _fetch_binance_btc_open_interest_hist()
     avwap_df, anchor_ts = _build_anchored_vwap_frame(klines, anchor_mode)
     sweeps = _detect_recent_sweeps(avwap_df, oi_hist)

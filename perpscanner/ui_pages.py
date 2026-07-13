@@ -124,7 +124,8 @@ def _render_btc_options_cockpit(anchor_mode: str):
     st.title("BTC Options Screener")
     st.caption(
         "Phase 1 public-data framework using Deribit BTC options and Binance BTCUSDT perpetuals. "
-        "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks."
+        "GEX here is a simple call-minus-put gamma approximation built from Deribit open interest and greeks, "
+        "expressed as dollar gamma per 1% underlying move (industry convention) over the top-OI contracts."
     )
 
     st.markdown("### Institutional Positioning Summary")
@@ -333,7 +334,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
 
     st.markdown("### Sweep Dashboard")
     if sweeps.empty:
-        st.caption("No recent 5m sweep candidates were detected from the current price / wick / volume / OI rules.")
+        st.caption("No recent intraday sweep candidates were detected from the current price / wick / volume / OI rules.")
     else:
         sweep_df = sweeps.copy()
         sweep_df["ts"] = sweep_df["ts"].dt.strftime("%Y-%m-%d %H:%M")

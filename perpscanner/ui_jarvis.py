@@ -319,8 +319,11 @@ def _build_institutional_positioning_cards(bundle: dict[str, object]) -> list[di
         avwap = _safe_float(latest.get("avwap"))
         band_2_up = _safe_float(latest.get("band_2_up"))
         band_2_dn = _safe_float(latest.get("band_2_dn"))
-        latest_sweep = None if sweeps.empty else str(sweeps.sort_values("ts").iloc[-1].get("direction", ""))
-        if close > avwap and close < band_2_up and (latest_sweep.startswith("Down-sweep") or latest_sweep is None):
+        # Empty string (not None) when no sweeps: these branches call
+        # .startswith, and a None here crashed the whole options page
+        # whenever the sweep detector came back empty.
+        latest_sweep = "" if sweeps.empty else str(sweeps.sort_values("ts").iloc[-1].get("direction", ""))
+        if close > avwap and close < band_2_up and (not latest_sweep or latest_sweep.startswith("Down-sweep")):
             tape_state = "green"
             tape_status = "Supportive"
             tape_copy = "Price is above anchored VWAP and the latest tape does not show a fresh bearish rejection."

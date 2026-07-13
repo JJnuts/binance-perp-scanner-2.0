@@ -342,31 +342,55 @@ def fetch_ltf_symbol_contexts(symbols: tuple[str, ...], use_ws: bool = WS_LTF_EN
             if klines:
                 out[symbol] = {"klines": klines, "oi_hist": oi_hist}
     return out
+_BTC_PERP_KLINE_COLUMNS = [
+    "ts",
+    "open",
+    "high",
+    "low",
+    "close",
+    "base_vol",
+    "close_ts",
+    "quote_vol",
+    "trades",
+    "taker_buy_base",
+    "taker_buy_quote",
+    "ignore",
+]
+
+
 def _fetch_binance_btc_perp_klines(interval: str = "5m", limit: int = BTC_OPTIONS_KLINE_LIMIT) -> pd.DataFrame:
-    raw = _get_json("/fapi/v1/klines", params={"symbol": BTC_SYMBOL, "interval": interval, "limit": limit}, timeout=20)
-    df = pd.DataFrame(
-        raw,
-        columns=[
-            "ts",
-            "open",
-            "high",
-            "low",
-            "close",
-            "base_vol",
-            "close_ts",
-            "quote_vol",
-            "trades",
-            "taker_buy_base",
-            "taker_buy_quote",
-            "ignore",
-        ],
-    )
+    # Paginated backwards from now (fapi caps a single request at 1500
+    # bars) so anchor modes that need a week or a month of history - the
+    # anchored-VWAP weekly/monthly opens - can actually reach their
+    # anchor instead of silently degrading to a rolling window.
+    chunks = []
+    end_time = None
+    remaining = limit
+    while remaining > 0:
+        chunk_limit = min(1500, remaining)
+        params = {"symbol": BTC_SYMBOL, "interval": interval, "limit": chunk_limit}
+        if end_time is not None:
+            params["endTime"] = end_time
+        raw = _get_json("/fapi/v1/klines", params=params, timeout=20)
+        if not raw:
+            break
+        chunk = pd.DataFrame(raw, columns=_BTC_PERP_KLINE_COLUMNS)
+        chunks.append(chunk)
+        end_time = int(chunk.iloc[0]["ts"]) - 1
+        remaining -= len(chunk)
+        if len(chunk) < chunk_limit:
+            break
+
+    if not chunks:
+        return pd.DataFrame(columns=[c for c in _BTC_PERP_KLINE_COLUMNS if c != "ignore"])
+
+    df = pd.concat(chunks, ignore_index=True).drop_duplicates(subset=["ts"]).sort_values("ts")
     for col in ["open", "high", "low", "close", "base_vol", "quote_vol", "taker_buy_base", "taker_buy_quote"]:
         df[col] = df[col].astype(float)
     df = _drop_unclosed_by_close_ts(df)
     df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_localize(None)
     df["trades"] = df["trades"].astype(int)
-    return df
+    return df.tail(limit).reset_index(drop=True)
 def _fetch_binance_btc_open_interest_hist(period: str = "5m", limit: int = 100) -> pd.DataFrame:
     raw = _get_json("/futures/data/openInterestHist", params={"symbol": BTC_SYMBOL, "period": period, "limit": limit}, timeout=20)
     df = pd.DataFrame(raw)

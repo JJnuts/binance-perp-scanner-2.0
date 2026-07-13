@@ -522,6 +522,96 @@ class ClosedBarTests(unittest.TestCase):
         self.assertEqual(float(df["quote_vol"].iloc[-1]), 100.0)
 
 
+class BtcScreenerTests(unittest.TestCase):
+    def test_positioning_cards_survive_empty_sweeps(self):
+        # Regression: latest_sweep was None with empty sweeps and the
+        # .startswith call crashed the whole options page.
+        avwap_df = pd.DataFrame(
+            [{"close": 101.0, "avwap": 100.0, "band_2_up": 105.0, "band_2_dn": 95.0}]
+        )
+        bundle = {
+            "spot": 100000.0,
+            "gamma_flip": 98000.0,
+            "total_signed_gex": 50.0,
+            "support_levels": pd.DataFrame(),
+            "resistance_levels": pd.DataFrame(),
+            "perp_snapshot": {"last_funding_rate": 0.0001},
+            "ibit_context": {"flow_state": "Neutral", "flow_copy": ""},
+            "avwap_df": avwap_df,
+            "sweeps": pd.DataFrame(),
+            "oi_change_1h": 0.01,
+        }
+
+        cards = scanner._build_institutional_positioning_cards(bundle)
+
+        self.assertEqual(len(cards), 5)
+        tape_card = next(card for card in cards if card["title"] == "VWAP / Tape")
+        self.assertEqual(tape_card["state"], "green")  # above VWAP, no bearish sweep
+
+    def test_history_comparison_median_spans_days_not_snapshots(self):
+        # 40 same-day snapshots at gex=1000 plus 30 older daily closes at
+        # gex=100: a raw tail(30) median would read 1000; the daily-collapsed
+        # median must blend the days instead.
+        ts_today = pd.Timestamp("2026-03-01 00:00:00")
+        rows = []
+        for day in range(30):
+            rows.append({"ts": ts_today - pd.Timedelta(days=30 - day), "total_abs_gex": 100.0, "total_oi": 1.0, "front_iv": 50.0, "front_rr": 0.0})
+        for snap in range(40):
+            rows.append({"ts": ts_today + pd.Timedelta(minutes=5 * snap), "total_abs_gex": 1000.0, "total_oi": 1.0, "front_iv": 50.0, "front_rr": 0.0})
+        history = pd.DataFrame(rows)
+        current = {"ts": history["ts"].max(), "total_abs_gex": 100.0, "total_oi": 1.0, "front_iv": 50.0, "front_rr": 0.0}
+
+        comparison = scanner._history_comparison(history, current)
+
+        # Daily median over ~30 days is 100 (29 old days at 100, 1 day at
+        # 1000), so current 100 shows ~0% -- not the -90% a snapshot-window
+        # median would produce.
+        self.assertAlmostEqual(comparison["gex_vs_30d_median"], 0.0, places=6)
+
+    def test_avwap_fetch_plan_reaches_anchor(self):
+        interval, limit = scanner._avwap_fetch_plan("Monthly Open")
+        self.assertEqual(interval, "15m")
+        self.assertGreaterEqual(limit * 15, 31 * 24 * 60)  # >= 31 days
+        interval, limit = scanner._avwap_fetch_plan("Weekly Open")
+        self.assertEqual(interval, "5m")
+        self.assertGreaterEqual(limit * 5, 8 * 24 * 60)  # >= 8 days
+
+    def test_btc_perp_klines_paginates_past_1500(self):
+        from perpscanner import data_binance
+
+        bar_ms = 5 * 60 * 1000
+        now_ms = scanner._epoch_ms_now()
+
+        def fake_get_json(path, params=None, timeout=15):
+            # Mirrors the Binance contract: bars with grid-aligned open
+            # times <= endTime, newest last.
+            params = params or {}
+            chunk_limit = int(params.get("limit", 1500))
+            end = int(params.get("endTime", now_ms - bar_ms))
+            last_open = (end // bar_ms) * bar_ms
+            rows = []
+            for i in range(chunk_limit - 1, -1, -1):
+                open_ms = last_open - i * bar_ms
+                rows.append(
+                    [open_ms, "1.0", "1.1", "0.9", "1.0", "10.0", open_ms + bar_ms - 1, "100.0", 5, "5.0", "50.0", "0"]
+                )
+            return rows
+
+        original = data_binance._get_json
+        data_binance._get_json = fake_get_json
+        try:
+            df = data_binance._fetch_binance_btc_perp_klines("5m", 2400)
+        finally:
+            data_binance._get_json = original
+
+        self.assertEqual(len(df), 2400)
+        self.assertTrue(df["ts"].is_monotonic_increasing)
+        self.assertEqual(df["ts"].duplicated().sum(), 0)
+        # Window must actually span ~2400 bars back, not 1500.
+        span_minutes = (df["ts"].iloc[-1] - df["ts"].iloc[0]).total_seconds() / 60.0
+        self.assertGreaterEqual(span_minutes, (2400 - 1) * 5)
+
+
 class PremiumOiFactorTests(unittest.TestCase):
     def test_oi_context_separates_one_bar_change_from_window_trend(self):
         idx = pd.date_range("2026-01-01", periods=8, freq="1h")
