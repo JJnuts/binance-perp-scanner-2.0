@@ -129,11 +129,26 @@ RESEARCH_LTF_COLUMNS = [
     "ltf_ignition_score",
     "confluence_long",
     "confluence_short",
+    "conviction_long",
+    "conviction_short",
+    "conviction_net",
+    "comp_expansion",
+    "comp_volume",
+    "comp_oi",
+    "comp_taker_net",
+    "comp_basis_net",
+    "veto_side",
     "volume_zscore",
     "oi_zscore",
     "taker_imbalance",
     "regime",
 ]
+# Confluence weight calibration: per-component directional rank IC is
+# only trusted once every component has this many cross-sections behind
+# it, and a cross-section only counts with this many veto-active rows.
+# Thin early data must not be able to quietly rewrite the trigger.
+RESEARCH_WEIGHT_MIN_GROUP = 6
+RESEARCH_WEIGHT_MIN_CROSS_SECTIONS = 30
 FRONT_DAY_HOURS = 24
 FRONT_WEEK_DAYS = 7
 PIN_MAX_HOURS = 24
@@ -244,6 +259,10 @@ TERM_GUIDE = [
     (
         "LTF Ignition",
         "Native lower-timeframe regime scan. It looks for recent ATR compression followed by ATR expansion, volume/OI z-score spikes, VWAP/range break, and BTC/ETH relative-strength confirmation.",
+    ),
+    (
+        "Conviction",
+        "Continuous version of the ignition trigger, from -1 (strong short) to +1 (strong long). Each confirmation contributes its fraction-of-gate instead of a hard pass/fail, so a 0.9 setup can be ranked above a 0.6 one even when both fired.",
     ),
     (
         "HTF Expansion",
@@ -382,6 +401,7 @@ TERM_GUIDE_GROUPS = [
             ("Momentum", "Primary LTF ranking. It blends alpha, RS vs BTC, volume, trend, OI, and funding quality into one 0-100 score."),
             ("HTF Momentum", "Higher-timeframe leadership score. It favors cleaner 24H to 7D strength over short bursts."),
             ("LTF Ignition", "Native 5m/15m/1h regime score for compression resolving into expansion."),
+            ("Conviction", "Continuous trigger score from -1 (strong short) to +1 (strong long). Ranks setups by how far past their gates the confirmations are, instead of pass/fail."),
             ("HTF Expansion", "Lighter HTF context score for compression/expansion and broader structure."),
             ("Best Setups", "Combined score for accurate LTF ignition with supportive HTF context."),
             ("Overext", "Overextension score. Higher values mean the move is more stretched and vulnerable to snapback."),

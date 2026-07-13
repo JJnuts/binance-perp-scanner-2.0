@@ -6,11 +6,17 @@ import streamlit as st
 from html import escape
 from datetime import datetime
 
-from .config import BTC_BUBBLE_TIMEFRAMES, RESEARCH_DB_PATH, TERM_GUIDE_GROUPS
+from .config import BTC_BUBBLE_TIMEFRAMES, CONFLUENCE_WEIGHTS, RESEARCH_DB_PATH, TERM_GUIDE_GROUPS
 from .utils import _format_gex_billions, _format_human_count, _safe_float
 from .data_spot import _spot_flow_summary, build_bitcoin_bubble_data
 from .options_analytics import build_btc_options_cockpit
-from .research import rank_ic_report, snapshot_counts, trigger_event_study
+from .research import (
+    confluence_component_ic,
+    rank_ic_report,
+    snapshot_counts,
+    suggest_confluence_weights,
+    trigger_event_study,
+)
 from .scoring import _build_best_setups
 from .ui_charts import (
     _build_avwap_chart,
@@ -425,6 +431,58 @@ def _render_research_dashboard():
                 "excess_hit_rate": st.column_config.NumberColumn("Excess Hit", format="%.2f"),
             },
         )
+
+    st.divider()
+    st.markdown(
+        "**Confluence component IC & weight calibration** "
+        "(directional, veto-conditioned; measures each trigger confirmation on its own)"
+    )
+    comp_ic = confluence_component_ic()
+    if comp_ic.empty:
+        st.info(
+            "No component data yet. Components are logged with each scan; they become "
+            "measurable once veto-active snapshots have forward returns behind them."
+        )
+    else:
+        st.dataframe(
+            comp_ic,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "component": st.column_config.TextColumn("Component"),
+                "horizon_h": st.column_config.NumberColumn("Horizon (h)", format="%.0f"),
+                "mean_ic": st.column_config.NumberColumn("Mean IC", format="%.4f"),
+                "ic_std": st.column_config.NumberColumn("IC Std", format="%.4f"),
+                "t_stat": st.column_config.NumberColumn("t-stat", format="%.2f"),
+                "cross_sections": st.column_config.NumberColumn("N", format="%d"),
+            },
+        )
+        suggestion = suggest_confluence_weights(comp_ic)
+        weights_df = pd.DataFrame(
+            {
+                "component": list(CONFLUENCE_WEIGHTS.keys()),
+                "current": [float(CONFLUENCE_WEIGHTS[k]) for k in CONFLUENCE_WEIGHTS],
+                "suggested": [suggestion["weights"].get(k, float(CONFLUENCE_WEIGHTS[k])) for k in CONFLUENCE_WEIGHTS],
+            }
+        )
+        st.dataframe(
+            weights_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "component": st.column_config.TextColumn("Component"),
+                "current": st.column_config.NumberColumn("Current Weight", format="%.2f"),
+                "suggested": st.column_config.NumberColumn("Suggested Weight", format="%.4f"),
+            },
+        )
+        if suggestion["ready"]:
+            st.caption(
+                "Suggestion is advisory - nothing is applied automatically. To adopt it, review "
+                "and paste into perpscanner/config.py: "
+                f"`CONFLUENCE_WEIGHTS = {suggestion['weights']}`"
+            )
+        else:
+            st.caption(f"No weight suggestion yet: {suggestion['reason']} (current weights shown unchanged).")
     st.caption(f"Store: {RESEARCH_DB_PATH}. CLI report: `py -m perpscanner.research` from the repo root.")
 def _set_page(page_name: str):
     st.session_state["app_page"] = page_name
@@ -462,6 +520,7 @@ def _show_ltf_ignition_table(df: pd.DataFrame):
         "ignition_state",
         "ignition_tf",
         "ltf_ignition_score",
+        "conviction_net",
         "atr_percentile",
         "atr_roc",
         "atr_compression_score",
@@ -495,6 +554,7 @@ def _show_ltf_ignition_table(df: pd.DataFrame):
             "ignition_state": st.column_config.TextColumn("State"),
             "ignition_tf": st.column_config.TextColumn("TF"),
             "ltf_ignition_score": st.column_config.NumberColumn("Ignition", format="%.1f"),
+            "conviction_net": st.column_config.NumberColumn("Conviction", format="%.2f"),
             "atr_percentile": st.column_config.NumberColumn("ATR %ile", format="%.1f"),
             "atr_roc": st.column_config.TextColumn("ATR ROC"),
             "atr_compression_score": st.column_config.NumberColumn("Compression", format="%.1f"),

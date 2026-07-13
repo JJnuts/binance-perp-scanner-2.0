@@ -20,17 +20,31 @@ import numpy as np
 import pandas as pd
 
 from .config import (
+    CONFLUENCE_WEIGHTS,
     RESEARCH_DB_PATH,
     RESEARCH_FACTOR_COLUMNS,
     RESEARCH_HORIZONS_HOURS,
     RESEARCH_LOG_MIN_INTERVAL_S,
     RESEARCH_LTF_COLUMNS,
     RESEARCH_MIN_GROUP_SIZE,
+    RESEARCH_WEIGHT_MIN_CROSS_SECTIONS,
+    RESEARCH_WEIGHT_MIN_GROUP,
 )
 from .utils import _utc_now_naive
 
 METRIC_TABLE = "metric_snapshots"
 LTF_TABLE = "ltf_snapshots"
+
+# Confluence trigger components as logged in the LTF table. Side-dependent
+# components carry a signed net (long minus short); direction-neutral ones
+# are plain [0, 1] gate fractions.
+CONFLUENCE_COMPONENT_COLUMNS = {
+    "expansion": "comp_expansion",
+    "volume": "comp_volume",
+    "oi": "comp_oi",
+    "taker": "comp_taker_net",
+    "basis": "comp_basis_net",
+}
 
 
 def _connect() -> sqlite3.Connection:
@@ -55,6 +69,26 @@ def _snapshot_frame(df: pd.DataFrame, columns: Iterable[str], scan_ts: pd.Timest
     return out
 
 
+def _ensure_table_columns(conn: sqlite3.Connection, table: str, df: pd.DataFrame) -> None:
+    """ALTER an existing snapshot table so new columns keep logging.
+
+    to_sql(if_exists="append") raises on columns the table has never seen,
+    and log_scan_snapshot swallows all exceptions by design - so without
+    this, adding a column to the schema would silently stop the research
+    log on any store created before the change.
+    """
+    try:
+        info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not info:
+        return  # table does not exist yet; to_sql will create it in full
+    existing = {row[1] for row in info}
+    for column in df.columns:
+        if column not in existing:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN "{column}"')
+
+
 def log_scan_snapshot(metrics_df: Optional[pd.DataFrame], ltf_df: Optional[pd.DataFrame]) -> dict[str, int]:
     """Append the current scan to the research store, throttled.
 
@@ -76,6 +110,7 @@ def log_scan_snapshot(metrics_df: Optional[pd.DataFrame], ltf_df: Optional[pd.Da
                 if last is not None and (now - last).total_seconds() < RESEARCH_LOG_MIN_INTERVAL_S:
                     continue
                 snap = _snapshot_frame(df, cols, now)
+                _ensure_table_columns(conn, table, snap)
                 snap.to_sql(table, conn, if_exists="append", index=False)
                 written[table] = len(snap)
             conn.commit()
@@ -98,7 +133,10 @@ def _load_table(table: str) -> pd.DataFrame:
         conn.close()
     if df.empty:
         return df
-    df["scan_ts"] = pd.to_datetime(df["scan_ts"])
+    # isoformat() omits microseconds when they are zero, so a store can
+    # legitimately hold mixed ISO precisions; default inference raises on
+    # that mix in pandas >= 2.
+    df["scan_ts"] = pd.to_datetime(df["scan_ts"], format="ISO8601")
     return df
 
 
@@ -219,6 +257,119 @@ def trigger_event_study(horizons: Iterable[float] = RESEARCH_HORIZONS_HOURS) -> 
     return pd.DataFrame(rows)
 
 
+def confluence_component_ic(horizons: Iterable[float] = RESEARCH_HORIZONS_HOURS) -> pd.DataFrame:
+    """Directional rank IC of each confluence trigger component.
+
+    Rows are conditioned on a structural veto side being active - exactly
+    the situations where the trigger actually consumes the components.
+    Short-side rows flip both the forward return and the side-dependent
+    components (taker, basis), so positive IC always reads "the component
+    ranked the continuations correctly in the direction being considered".
+    """
+    ltf = _load_table(LTF_TABLE)
+    if ltf.empty or "veto_side" not in ltf.columns:
+        return pd.DataFrame()
+    prices = ltf[["scan_ts", "symbol", "price"]].drop_duplicates(subset=["scan_ts", "symbol"])
+    active = ltf[ltf["veto_side"].isin(["Long", "Short"])].copy()
+    if active.empty:
+        return pd.DataFrame()
+    side_sign = np.where(active["veto_side"] == "Long", 1.0, -1.0)
+    for column in ("comp_taker_net", "comp_basis_net"):
+        if column in active.columns:
+            active[column] = pd.to_numeric(active[column], errors="coerce") * side_sign
+    rows = []
+    for horizon in horizons:
+        fwd = _forward_return_frame(prices, horizon)
+        df = active.merge(fwd, on=["scan_ts", "symbol"]).dropna(subset=["fwd_ret"])
+        if df.empty:
+            continue
+        df["directional_ret"] = df["fwd_ret"] * np.where(df["veto_side"] == "Long", 1.0, -1.0)
+        grouped = [g for _, g in df.groupby("scan_ts") if len(g) >= RESEARCH_WEIGHT_MIN_GROUP]
+        for component, column in CONFLUENCE_COMPONENT_COLUMNS.items():
+            if column not in df.columns:
+                continue
+            ics = []
+            for g in grouped:
+                values = pd.to_numeric(g[column], errors="coerce")
+                if values.nunique() < 3:
+                    continue
+                ic = values.corr(g["directional_ret"], method="spearman")
+                if pd.notna(ic):
+                    ics.append(float(ic))
+            if not ics:
+                continue
+            ic_arr = np.asarray(ics)
+            std = float(ic_arr.std(ddof=1)) if len(ic_arr) > 1 else 0.0
+            rows.append(
+                {
+                    "component": component,
+                    "horizon_h": horizon,
+                    "mean_ic": float(ic_arr.mean()),
+                    "ic_std": std,
+                    "t_stat": float(ic_arr.mean() / (std / np.sqrt(len(ic_arr)))) if std > 0 else 0.0,
+                    "cross_sections": len(ic_arr),
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["horizon_h", "mean_ic"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
+
+
+def suggest_confluence_weights(ic_df: Optional[pd.DataFrame] = None) -> dict[str, object]:
+    """IC-proportional CONFLUENCE_WEIGHTS suggestion, with guardrails.
+
+    Pools each component's mean IC across horizons, floors negatives at
+    zero, and renormalises to sum 1. Advisory only - nothing is applied
+    automatically; the report prints a paste-ready config line instead.
+    Until every component has RESEARCH_WEIGHT_MIN_CROSS_SECTIONS
+    cross-sections behind it the current weights are returned unchanged,
+    so thin early data cannot argue for rewriting the trigger.
+    """
+    if ic_df is None:
+        ic_df = confluence_component_ic()
+    current = {k: float(v) for k, v in CONFLUENCE_WEIGHTS.items()}
+    if ic_df is None or ic_df.empty:
+        return {"weights": current, "pooled": pd.DataFrame(), "ready": False, "reason": "no component IC data yet"}
+    pooled = ic_df.groupby("component").agg(
+        mean_ic=("mean_ic", "mean"),
+        min_cross_sections=("cross_sections", "min"),
+    )
+    missing = [c for c in CONFLUENCE_WEIGHTS if c not in pooled.index]
+    if missing:
+        return {
+            "weights": current,
+            "pooled": pooled,
+            "ready": False,
+            "reason": f"components without measurable IC yet: {', '.join(missing)}",
+        }
+    thin = pooled[pooled["min_cross_sections"] < RESEARCH_WEIGHT_MIN_CROSS_SECTIONS]
+    if not thin.empty:
+        return {
+            "weights": current,
+            "pooled": pooled,
+            "ready": False,
+            "reason": (
+                f"insufficient cross-sections (< {RESEARCH_WEIGHT_MIN_CROSS_SECTIONS}) for: "
+                f"{', '.join(thin.index)}"
+            ),
+        }
+    floored = pooled["mean_ic"].clip(lower=0.0)
+    if float(floored.sum()) <= 0.0:
+        return {
+            "weights": current,
+            "pooled": pooled,
+            "ready": False,
+            "reason": "no component shows positive directional IC; keep current weights and investigate",
+        }
+    normalised = floored / float(floored.sum())
+    suggested = {k: round(float(normalised[k]), 4) for k in CONFLUENCE_WEIGHTS}
+    return {"weights": suggested, "pooled": pooled, "ready": True, "reason": "ok"}
+
+
 def snapshot_counts() -> dict[str, object]:
     out: dict[str, object] = {}
     for table in (METRIC_TABLE, LTF_TABLE):
@@ -249,6 +400,20 @@ def _print_report() -> None:
     else:
         print("\nIgnition trigger event study (direction-adjusted):")
         print(ev.to_string(index=False, float_format=lambda v: f"{v: .4f}"))
+    comp_ic = confluence_component_ic()
+    if comp_ic.empty:
+        print("\nNo confluence component data yet (needs veto-active snapshots plus forward returns).")
+    else:
+        print("\nConfluence component IC (directional, veto-conditioned):")
+        print(comp_ic.to_string(index=False, float_format=lambda v: f"{v: .4f}"))
+        suggestion = suggest_confluence_weights(comp_ic)
+        print("\nCurrent CONFLUENCE_WEIGHTS:", {k: float(v) for k, v in CONFLUENCE_WEIGHTS.items()})
+        if suggestion["ready"]:
+            print("Suggested (IC-proportional):", suggestion["weights"])
+            print("To apply, review and paste into perpscanner/config.py:")
+            print(f"CONFLUENCE_WEIGHTS = {suggestion['weights']}")
+        else:
+            print(f"No weight suggestion yet: {suggestion['reason']}")
 
 
 if __name__ == "__main__":

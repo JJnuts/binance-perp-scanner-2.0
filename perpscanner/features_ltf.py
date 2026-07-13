@@ -164,6 +164,50 @@ def _ltf_interval_metrics(
     )
     confluence_long = float(long_confluence_series.iloc[-1]) if not long_confluence_series.empty else 0.0
     confluence_short = float(short_confluence_series.iloc[-1]) if not short_confluence_series.empty else 0.0
+
+    # Continuous conviction: the same five confirmations, but each scored
+    # as the fraction of its gate achieved (capped at 1) instead of a hard
+    # pass/fail. The binary trigger below is untouched; this exposes the
+    # graded number underneath it so setups can be ranked and sized, and
+    # so the research loop can IC-validate each component (a boolean that
+    # is almost always 0 carries no rank information).
+    comp_expansion = (
+        float(np.clip(atr_roc / max(thr.atr_roc, 1e-12), 0.0, 1.0)) if compression_recent_bars > 0 else 0.0
+    )
+    comp_volume = float(np.clip(volume_zscore / max(thr.volume_z, 1e-12), 0.0, 1.0))
+    comp_oi = float(np.clip(oi_zscore / max(thr.oi_z, 1e-12), 0.0, 1.0))
+    comp_taker_long = (
+        float(np.clip(taker_imbalance / TAKER_IMBALANCE_THRESHOLD, 0.0, 1.0)) if cvd_3bar_slope > 0.0 else 0.0
+    )
+    comp_taker_short = (
+        float(np.clip(-taker_imbalance / TAKER_IMBALANCE_THRESHOLD, 0.0, 1.0)) if cvd_3bar_slope < 0.0 else 0.0
+    )
+    # Basis has no magnitude gate (BASIS_CONFIRM_BP is 0), so it stays a
+    # binary confirm; when spot data is missing both sides read 1.0 and
+    # the component nets to zero.
+    comp_basis_long = 1.0 if basis_long_confirmed else 0.0
+    comp_basis_short = 1.0 if basis_short_confirmed else 0.0
+    conviction_long = float(
+        CONFLUENCE_WEIGHTS["expansion"] * comp_expansion
+        + CONFLUENCE_WEIGHTS["volume"] * comp_volume
+        + CONFLUENCE_WEIGHTS["oi"] * comp_oi
+        + CONFLUENCE_WEIGHTS["taker"] * comp_taker_long
+        + CONFLUENCE_WEIGHTS["basis"] * comp_basis_long
+    )
+    conviction_short = float(
+        CONFLUENCE_WEIGHTS["expansion"] * comp_expansion
+        + CONFLUENCE_WEIGHTS["volume"] * comp_volume
+        + CONFLUENCE_WEIGHTS["oi"] * comp_oi
+        + CONFLUENCE_WEIGHTS["taker"] * comp_taker_short
+        + CONFLUENCE_WEIGHTS["basis"] * comp_basis_short
+    )
+    conviction_net = conviction_long - conviction_short
+    if bool(long_veto_series.iloc[-1]):
+        veto_side = "Long"
+    elif bool(short_veto_series.iloc[-1]):
+        veto_side = "Short"
+    else:
+        veto_side = "None"
     raw_long_trigger_series = long_veto_series & (long_confluence_series >= CONFLUENCE_TRIGGER_THRESHOLD)
     raw_short_trigger_series = short_veto_series & (short_confluence_series >= CONFLUENCE_TRIGGER_THRESHOLD)
     long_trigger_transition = _latest_trigger_transition(raw_long_trigger_series)
@@ -252,6 +296,15 @@ def _ltf_interval_metrics(
         "trigger_direction": trigger_direction,
         "confluence_long": confluence_long,
         "confluence_short": confluence_short,
+        "conviction_long": conviction_long,
+        "conviction_short": conviction_short,
+        "conviction_net": conviction_net,
+        "comp_expansion": comp_expansion,
+        "comp_volume": comp_volume,
+        "comp_oi": comp_oi,
+        "comp_taker_net": comp_taker_long - comp_taker_short,
+        "comp_basis_net": comp_basis_long - comp_basis_short,
+        "veto_side": veto_side,
         "regime": thr.regime,
         "volume_z_gate": thr.volume_z,
         "oi_z_gate": thr.oi_z,

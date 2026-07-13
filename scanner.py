@@ -30,6 +30,8 @@ from perpscanner.config import (  # noqa: F401
     VOLUME_Z_THRESHOLD,
     OI_Z_THRESHOLD,
     FRESH_TRIGGER_BARS,
+    CONFLUENCE_TRIGGER_THRESHOLD,
+    CONFLUENCE_WEIGHTS,
     MAX_BEST_SETUP_TRIGGER_BARS,
     MIN_TF_ALIGNMENT,
     TAKER_IMBALANCE_THRESHOLD,
@@ -238,9 +240,11 @@ from perpscanner.scoring import (  # noqa: F401
     _build_best_setups,
 )
 from perpscanner.research import (  # noqa: F401
+    confluence_component_ic,
     log_scan_snapshot,
     rank_ic_report,
     snapshot_counts,
+    suggest_confluence_weights,
     trigger_event_study,
 )
 from perpscanner.ws_feed import (  # noqa: F401

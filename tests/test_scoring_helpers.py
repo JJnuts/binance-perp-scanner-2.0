@@ -411,6 +411,34 @@ class RegimeThresholdTests(unittest.TestCase):
         self.assertGreaterEqual(row["confluence_long"], 0.0)
         self.assertLessEqual(row["confluence_long"], 1.0)
 
+    def test_ltf_metrics_emit_continuous_conviction(self):
+        df = self._trending_frame()
+        row = scanner._ltf_interval_metrics("TESTUSDT", "5m", df, pd.DataFrame(), df, df, None)
+
+        for field in (
+            "conviction_long",
+            "conviction_short",
+            "conviction_net",
+            "comp_expansion",
+            "comp_volume",
+            "comp_oi",
+            "comp_taker_net",
+            "comp_basis_net",
+            "veto_side",
+        ):
+            self.assertIn(field, row)
+        self.assertGreaterEqual(row["conviction_long"], 0.0)
+        self.assertLessEqual(row["conviction_long"], 1.0)
+        self.assertGreaterEqual(row["conviction_short"], 0.0)
+        self.assertLessEqual(row["conviction_short"], 1.0)
+        self.assertAlmostEqual(row["conviction_net"], row["conviction_long"] - row["conviction_short"])
+        for comp in ("comp_expansion", "comp_volume", "comp_oi"):
+            self.assertGreaterEqual(row[comp], 0.0)
+            self.assertLessEqual(row[comp], 1.0)
+        self.assertGreaterEqual(row["comp_taker_net"], -1.0)
+        self.assertLessEqual(row["comp_taker_net"], 1.0)
+        self.assertIn(row["veto_side"], {"Long", "Short", "None"})
+
     def test_tighter_thresholds_lower_spike_scores(self):
         df = self._trending_frame()
         loose = scanner._ltf_interval_metrics(
@@ -592,6 +620,107 @@ class ResearchLoopTests(unittest.TestCase):
             row = ic[ic["factor"] == "momentum_score"].iloc[0]
             self.assertAlmostEqual(row["mean_ic"], 1.0, places=6)
             self.assertEqual(row["cross_sections"], 1)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def test_log_scan_snapshot_migrates_old_table_schema(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            # Simulate a store created before the conviction columns existed.
+            conn = research._connect()
+            try:
+                pd.DataFrame(
+                    {"scan_ts": ["2026-01-01T00:00:00"], "symbol": ["OLDUSDT"], "price": [1.0]}
+                ).to_sql(research.METRIC_TABLE, conn, if_exists="append", index=False)
+                conn.commit()
+            finally:
+                conn.close()
+
+            df = pd.DataFrame({"symbol": ["AAA"], "price": [1.0], "momentum_score": [50.0]})
+            written = research.log_scan_snapshot(df, None)
+
+            self.assertEqual(written[research.METRIC_TABLE], 1)
+            stored = research._load_table(research.METRIC_TABLE)
+            self.assertEqual(len(stored), 2)
+            self.assertIn("momentum_score", stored.columns)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def _seed_component_store(self, research, cross_sections=35, symbols=8):
+        """Store where comp_volume ranks directional returns perfectly and
+        comp_oi ranks them perfectly backwards, under a Long veto."""
+        conn = research._connect()
+        try:
+            rows = []
+            t0 = pd.Timestamp("2026-01-01 00:00:00")
+            for t in range(cross_sections + 1):
+                ts = (t0 + pd.Timedelta(hours=t)).isoformat()
+                for i in range(symbols):
+                    # Price path: each symbol gains i% per hour -> forward
+                    # return ranking always matches the symbol index.
+                    rows.append(
+                        {
+                            "scan_ts": ts,
+                            "symbol": f"S{i:02d}USDT",
+                            "price": 100.0 * (1.0 + i / 100.0) ** t,
+                            "veto_side": "Long",
+                            "comp_expansion": (i % 4) / 4.0,
+                            "comp_volume": i / float(symbols),
+                            "comp_oi": (symbols - 1 - i) / float(symbols),
+                            "comp_taker_net": i / float(symbols),
+                            "comp_basis_net": (i % 3) / 3.0,
+                            "trigger_fresh": 0,
+                            "trigger_direction": "None",
+                        }
+                    )
+            pd.DataFrame(rows).to_sql(research.LTF_TABLE, conn, if_exists="append", index=False)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_confluence_component_ic_ranks_predictive_component(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            self._seed_component_store(research)
+            ic = research.confluence_component_ic(horizons=(1.0,))
+
+            self.assertFalse(ic.empty)
+            by_comp = ic.set_index("component")
+            self.assertAlmostEqual(by_comp.loc["volume", "mean_ic"], 1.0, places=6)
+            self.assertAlmostEqual(by_comp.loc["oi", "mean_ic"], -1.0, places=6)
+            self.assertGreaterEqual(by_comp.loc["volume", "cross_sections"], 30)
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def test_suggest_confluence_weights_floors_negative_ic(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            self._seed_component_store(research)
+            ic = research.confluence_component_ic(horizons=(1.0,))
+            suggestion = research.suggest_confluence_weights(ic)
+
+            self.assertTrue(suggestion["ready"], suggestion["reason"])
+            weights = suggestion["weights"]
+            self.assertEqual(set(weights), set(scanner.CONFLUENCE_WEIGHTS))
+            self.assertAlmostEqual(sum(weights.values()), 1.0, places=2)
+            self.assertEqual(weights["oi"], 0.0)  # negative IC floored out
+            self.assertGreater(weights["volume"], weights["basis"])
+        finally:
+            research.RESEARCH_DB_PATH = original
+            tmpdir.cleanup()
+
+    def test_suggest_confluence_weights_refuses_thin_data(self):
+        research, original, tmpdir = self._with_temp_db()
+        try:
+            self._seed_component_store(research, cross_sections=5)
+            ic = research.confluence_component_ic(horizons=(1.0,))
+            suggestion = research.suggest_confluence_weights(ic)
+
+            self.assertFalse(suggestion["ready"])
+            self.assertEqual(suggestion["weights"], {k: float(v) for k, v in scanner.CONFLUENCE_WEIGHTS.items()})
         finally:
             research.RESEARCH_DB_PATH = original
             tmpdir.cleanup()
