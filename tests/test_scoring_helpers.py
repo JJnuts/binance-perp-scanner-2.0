@@ -522,6 +522,95 @@ class ClosedBarTests(unittest.TestCase):
         self.assertEqual(float(df["quote_vol"].iloc[-1]), 100.0)
 
 
+class PremiumOiFactorTests(unittest.TestCase):
+    def test_oi_context_separates_one_bar_change_from_window_trend(self):
+        idx = pd.date_range("2026-01-01", periods=8, freq="1h")
+        # OI unwinding all window, with a last-bar uptick: the 1-bar change
+        # is positive while the multi-hour trend stays firmly negative.
+        values = [1000.0, 950.0, 900.0, 850.0, 800.0, 750.0, 700.0, 710.0]
+        df = pd.DataFrame({"oi_value": values}, index=idx)
+
+        oi_value, oi_change, oi_trend = scanner._oi_context_from_frame(df)
+
+        self.assertEqual(oi_value, 710.0)
+        self.assertGreater(oi_change, 0.0)
+        self.assertLess(oi_trend, 0.0)
+        self.assertAlmostEqual(oi_trend, 710.0 / 1000.0 - 1.0)
+
+    def test_oi_context_handles_empty_and_short_frames(self):
+        self.assertEqual(scanner._oi_context_from_frame(None), (0.0, 0.0, 0.0))
+        self.assertEqual(scanner._oi_context_from_frame(pd.DataFrame()), (0.0, 0.0, 0.0))
+        one_row = pd.DataFrame({"oi_value": [100.0]})
+        self.assertEqual(scanner._oi_context_from_frame(one_row), (0.0, 0.0, 0.0))
+
+    def test_premium_snapshot_computes_basis_points(self):
+        raw = [
+            {"symbol": "AAAUSDT", "markPrice": "100.10", "indexPrice": "100.00"},
+            {"symbol": "BBBUSDT", "markPrice": "99.90", "indexPrice": "100.00"},
+            {"symbol": "BADUSDT", "markPrice": "1.0", "indexPrice": "0.0"},  # guarded
+            "garbage",
+        ]
+
+        snapshot = scanner._premium_snapshot_from_raw(raw)
+
+        self.assertAlmostEqual(snapshot["AAAUSDT"], 10.0, places=6)
+        self.assertAlmostEqual(snapshot["BBBUSDT"], -10.0, places=6)
+        self.assertNotIn("BADUSDT", snapshot)
+        self.assertEqual(scanner._premium_snapshot_from_raw({"not": "a list"}), {})
+
+    def test_premium_roc_uses_oldest_usable_snapshot(self):
+        now = pd.Timestamp("2026-01-01 12:00:00")
+        history = [
+            (now - pd.Timedelta(minutes=30), {"AAAUSDT": 0.0}),
+            (now - pd.Timedelta(minutes=1), {"AAAUSDT": 9.0}),  # too fresh to be a base
+        ]
+        snapshot = {"AAAUSDT": 5.0, "NEWUSDT": 3.0}
+
+        roc = scanner._premium_roc_from_history(history, snapshot, now, min_age_s=240)
+
+        self.assertAlmostEqual(roc["AAAUSDT"], 10.0, places=6)  # +5 bp over 0.5h
+        self.assertEqual(roc["NEWUSDT"], 0.0)  # symbol absent from the base
+        self.assertEqual(
+            scanner._premium_roc_from_history([], snapshot, now), {"AAAUSDT": 0.0, "NEWUSDT": 0.0}
+        )
+
+    def test_fetch_premium_index_all_warms_roc_buffer(self):
+        from perpscanner import data_binance
+
+        original_get_json = data_binance._get_json
+        original_history = list(data_binance._PREMIUM_HISTORY)
+        data_binance._PREMIUM_HISTORY.clear()
+        try:
+            data_binance._get_json = lambda path, params=None, timeout=15: [
+                {"symbol": "AAAUSDT", "markPrice": "100.10", "indexPrice": "100.00"}
+            ]
+            first = data_binance.fetch_premium_index_all()
+            self.assertAlmostEqual(first["AAAUSDT"]["premium_bp"], 10.0, places=6)
+            self.assertEqual(first["AAAUSDT"]["premium_roc_bp_h"], 0.0)  # cold buffer
+
+            # Age the buffered snapshot past the minimum base age, then move
+            # the premium: RoC must become measurable.
+            ts, snap = data_binance._PREMIUM_HISTORY[0]
+            data_binance._PREMIUM_HISTORY[0] = (ts - pd.Timedelta(hours=1), snap)
+            data_binance._get_json = lambda path, params=None, timeout=15: [
+                {"symbol": "AAAUSDT", "markPrice": "100.20", "indexPrice": "100.00"}
+            ]
+            second = data_binance.fetch_premium_index_all()
+            self.assertAlmostEqual(second["AAAUSDT"]["premium_bp"], 20.0, places=6)
+            self.assertAlmostEqual(second["AAAUSDT"]["premium_roc_bp_h"], 10.0, places=2)
+
+            # Upstream failure degrades to {} instead of raising.
+            def _boom(path, params=None, timeout=15):
+                raise RuntimeError("down")
+
+            data_binance._get_json = _boom
+            self.assertEqual(data_binance.fetch_premium_index_all(), {})
+        finally:
+            data_binance._get_json = original_get_json
+            data_binance._PREMIUM_HISTORY.clear()
+            data_binance._PREMIUM_HISTORY.extend(original_history)
+
+
 class ResearchLoopTests(unittest.TestCase):
     def _with_temp_db(self):
         from perpscanner import research

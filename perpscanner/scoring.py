@@ -57,6 +57,7 @@ from .data_binance import (
     fetch_htf_daily_contexts,
     fetch_ltf_spot_contexts,
     fetch_ltf_symbol_contexts,
+    fetch_premium_index_all,
     fetch_symbol_contexts,
     fetch_ticker_stats,
 )
@@ -93,6 +94,7 @@ def build_metrics(
     candidates = _candidate_symbols(symbols, ticker_stats, min_quote_volume, min_trades)
     contexts = fetch_symbol_contexts(candidates)
     daily_contexts = fetch_htf_daily_contexts(candidates)
+    premium_map = fetch_premium_index_all()
     btc_context = contexts.get(BTC_SYMBOL)
     if not btc_context:
         return pd.DataFrame()
@@ -117,6 +119,10 @@ def build_metrics(
         df = context["klines"]
         oi_value = float(context["oi_value"])
         oi_change = float(context["oi_change"])
+        oi_trend = float(context.get("oi_trend", 0.0))
+        premium_entry = premium_map.get(symbol, {})
+        premium_bp = float(premium_entry.get("premium_bp", 0.0))
+        premium_roc_bp_h = float(premium_entry.get("premium_roc_bp_h", 0.0))
         funding_rate = float(context["funding_rate"])
         funding_cumulative_7d = float(context["funding_cumulative_7d"])
         funding_trend = float(context["funding_trend"])
@@ -332,6 +338,9 @@ def build_metrics(
                 "funding_trend": funding_trend,
                 "oi_value": oi_value,
                 "oi_change_1h": oi_change,
+                "oi_trend_raw": oi_trend,
+                "premium_bp": premium_bp,
+                "premium_roc_bp_h": premium_roc_bp_h,
                 "ret_1h": ret_1h,
                 "ret_4h": ret_4h,
                 "ret_24h": ret_24h,
@@ -412,6 +421,14 @@ def build_metrics(
     out["trend_score"] = _percentile_score(out["trend_raw"])
     out["htf_trend_score"] = _percentile_score(out["htf_trend_raw"])
     out["oi_score"] = _percentile_score(out["oi_raw"])
+    # Candidate factors (not in any blend yet - the rank-IC report is the
+    # referee before they earn weights). Carry-theory sign conventions:
+    # a rich, richening perp ranks short (high premium precedes declines,
+    # negative premium precedes rises); building OI ranks long, a
+    # multi-hour OI unwind ranks short.
+    out["premium_score"] = _percentile_score(out["premium_bp"], ascending=False)
+    out["premium_roc_score"] = _percentile_score(out["premium_roc_bp_h"], ascending=False)
+    out["oi_trend_score"] = _percentile_score(out["oi_trend_raw"])
     out["funding_quality_score"] = _funding_quality_score(out["funding_z"], out["funding_rate"])
     out["funding_trend_quality_score"] = _funding_trend_quality_score(
         out["funding_cumulative_z"], out["funding_trend_z"]

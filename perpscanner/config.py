@@ -64,8 +64,18 @@ EMA_MID = 36
 EMA_SLOW = 50
 VOLUME_LOOKBACK = 30
 OI_LOOKBACK = 3
+# Directional OI trend: slope over a multi-hour window instead of the
+# single-bar oi_change delta - falling OI (positions unwinding) is the
+# claimed downside predictor, and one bar of it is mostly noise.
+OI_TREND_LOOKBACK = 8
 OI_PERIOD = "1h"
 FUNDING_LIMIT = 30
+# Premium (perp mark vs index) factor: one bulk premiumIndex call covers
+# every symbol. Rate-of-change comes from an in-process buffer of scan
+# snapshots - a buffered snapshot must be at least MIN_AGE old to serve
+# as the RoC base, and the buffer is trimmed past MAX_AGE.
+PREMIUM_ROC_MIN_AGE_S = 240
+PREMIUM_HISTORY_MAX_AGE_S = 7200
 MAX_WORKERS = 20
 # Websocket LTF feed: closed 5m/15m/1h bars stream in instead of being
 # re-polled over REST every LTF_CACHE_TTL, which risks request-weight
@@ -119,6 +129,15 @@ RESEARCH_FACTOR_COLUMNS = [
     "htf_setup_score",
     "overextension_score",
     "htf_expansion_score",
+    # Candidate factors under IC evaluation (not yet in any blend). Raw
+    # signed values are logged alongside the carry-convention scores so
+    # the rank-IC report can judge the sign choice itself.
+    "premium_bp",
+    "premium_roc_bp_h",
+    "oi_trend_raw",
+    "premium_score",
+    "premium_roc_score",
+    "oi_trend_score",
 ]
 RESEARCH_LTF_COLUMNS = [
     "ignition_tf",
@@ -369,6 +388,18 @@ TERM_GUIDE = [
         "1-hour open-interest change. Positive values mean new exposure is entering; negative values suggest exposure is being closed out.",
     ),
     (
+        "OI Trend",
+        "Signed open-interest slope over the last ~8 hours. Falling OI means positions are unwinding, which tends to precede price declines; a single-bar OI change is mostly noise by comparison.",
+    ),
+    (
+        "Premium",
+        "Perp mark price vs index price, in basis points. Positive premium means leveraged longs are paying up (crowding); persistent rich premium is a late-move warning, cheap or negative premium often precedes rises.",
+    ),
+    (
+        "Premium RoC",
+        "Rate of change of the premium, in bp per hour. Rising premium means crowding is building right now; falling premium means the leverage is unwinding. The direction of change often matters more than the level.",
+    ),
+    (
         "Funding",
         "Latest funding rate on the perpetual contract. Mildly positive funding can be healthy, but extreme positive funding often signals crowding.",
     ),
@@ -436,6 +467,7 @@ TERM_GUIDE_GROUPS = [
             ("Vol Ratio", "Current 1H quote volume divided by its recent baseline."),
             ("Vol Z", "1H volume z-score. It shows how unusual the latest volume is vs recent history."),
             ("OI 1H", "1-hour open-interest change. Positive means exposure is entering; negative means it is being closed."),
+            ("OI Trend", "Signed OI slope over ~8 hours. Falling OI (unwinding) tends to precede price declines."),
         ],
     ),
     (
@@ -446,6 +478,8 @@ TERM_GUIDE_GROUPS = [
             ("Funding", "Latest funding rate on the perpetual contract."),
             ("Funding 7D", "Recent cumulative funding backdrop. Helpful for spotting persistent crowding."),
             ("Funding Trend Raw", "Latest funding minus its recent baseline. Useful for seeing crowding accelerate or fade."),
+            ("Premium", "Perp mark vs index in bp. Rich premium = leveraged crowding; cheap/negative premium often precedes rises."),
+            ("Premium RoC", "Premium change in bp/hour. Rising = crowding building now; falling = leverage unwinding."),
             ("24H Quote Vol", "24-hour quote volume from Binance futures ticker data. One of the main liquidity gates."),
             ("24H Trades", "24-hour trade count from Binance futures ticker data. Helps exclude weakly traded contracts."),
             ("OI Value", "Estimated open-interest notional value. Higher values usually mean a more liquid, trustworthy contract."),

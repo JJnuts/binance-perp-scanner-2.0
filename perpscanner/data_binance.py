@@ -1,5 +1,7 @@
 """Binance USDT-M futures + spot market data fetchers."""
 
+import threading
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -22,12 +24,14 @@ from .config import (
     LTF_KLINE_LIMITS,
     LTF_OI_LIMIT,
     MAX_WORKERS,
-    OI_LOOKBACK,
     OI_PERIOD,
+    OI_TREND_LOOKBACK,
+    PREMIUM_HISTORY_MAX_AGE_S,
+    PREMIUM_ROC_MIN_AGE_S,
     WS_LTF_ENABLED,
 )
 from .net import _get_json, _get_json_url
-from .utils import _drop_unclosed_by_close_ts, _safe_float
+from .utils import _drop_unclosed_by_close_ts, _safe_float, _utc_now_naive
 from .ws_feed import WSKlineFeed, get_shared_feed
 
 
@@ -146,16 +150,24 @@ def _fetch_open_interest_hist_frame(symbol: str, period: str, limit: int) -> pd.
     df["ts"] = pd.to_datetime(df["timestamp"], unit="ms")
     df["oi_value"] = df["sumOpenInterestValue"].astype(float)
     return df.set_index("ts")[["oi_value"]].sort_index()
-def _fetch_open_interest_hist(symbol: str) -> tuple[float, float]:
-    df = _fetch_open_interest_hist_frame(symbol, OI_PERIOD, OI_LOOKBACK)
-    if df.empty or len(df) < 2:
-        return 0.0, 0.0
+def _oi_context_from_frame(df: Optional[pd.DataFrame]) -> tuple[float, float, float]:
+    """(latest OI value, 1-bar change, full-window trend) from an OI frame.
 
+    The 1-bar change keeps the existing oi_change semantics; the trend is
+    the signed slope over the whole fetched window (~OI_TREND_LOOKBACK
+    hours), because a single bar of OI change is mostly noise while a
+    multi-hour unwind is the actual downside tell.
+    """
+    if df is None or df.empty or len(df) < 2:
+        return 0.0, 0.0, 0.0
     latest_value = float(df["oi_value"].iloc[-1])
     prev_value = float(df["oi_value"].iloc[-2])
-    if prev_value <= 0:
-        return latest_value, 0.0
-    return latest_value, (latest_value / prev_value) - 1.0
+    first_value = float(df["oi_value"].iloc[0])
+    oi_change = (latest_value / prev_value) - 1.0 if prev_value > 0 else 0.0
+    oi_trend = (latest_value / first_value) - 1.0 if first_value > 0 else 0.0
+    return latest_value, oi_change, oi_trend
+def _fetch_open_interest_hist(symbol: str) -> tuple[float, float, float]:
+    return _oi_context_from_frame(_fetch_open_interest_hist_frame(symbol, OI_PERIOD, OI_TREND_LOOKBACK))
 def _fetch_funding_history(symbol: str) -> tuple[float, float, float]:
     params = {"symbol": symbol, "limit": FUNDING_LIMIT}
     raw = _get_json("/fapi/v1/fundingRate", params=params, timeout=12)
@@ -168,26 +180,100 @@ def _fetch_funding_history(symbol: str) -> tuple[float, float, float]:
     baseline = float(np.mean(rates[:-3])) if len(rates) > 3 else latest
     trend = latest - baseline
     return latest, cumulative, trend
-def _fetch_symbol_context(symbol: str) -> tuple[str, Optional[pd.DataFrame], float, float, float, float, float]:
+
+
+# --- Premium (perp mark vs index) factor --------------------------------
+# One bulk premiumIndex call covers every symbol, so the whole factor
+# costs a single request per scan. The endpoint has no history, so
+# rate-of-change comes from an in-process buffer of scan snapshots (same
+# lifecycle as the ws feed: survives Streamlit reruns, resets on app
+# restart and reads 0 until it warms - about two scans).
+_PREMIUM_HISTORY: list[tuple[pd.Timestamp, dict[str, float]]] = []
+_PREMIUM_HISTORY_LOCK = threading.Lock()
+
+
+def _premium_snapshot_from_raw(raw: object) -> dict[str, float]:
+    """Symbol -> premium in basis points, from the bulk premiumIndex payload."""
+    out: dict[str, float] = {}
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol", ""))
+        index_price = _safe_float(item.get("indexPrice"))
+        mark_price = _safe_float(item.get("markPrice"))
+        if not symbol or index_price <= 0.0:
+            continue
+        out[symbol] = (mark_price - index_price) / index_price * 10000.0
+    return out
+
+
+def _premium_roc_from_history(
+    history: list[tuple[pd.Timestamp, dict[str, float]]],
+    snapshot: dict[str, float],
+    now: pd.Timestamp,
+    min_age_s: float = PREMIUM_ROC_MIN_AGE_S,
+) -> dict[str, float]:
+    """Premium drift in bp per hour vs the oldest usable buffered snapshot."""
+    usable = [(ts, snap) for ts, snap in history if (now - ts).total_seconds() >= min_age_s]
+    if not usable:
+        return {symbol: 0.0 for symbol in snapshot}
+    base_ts, base = usable[0]
+    hours = max((now - base_ts).total_seconds() / 3600.0, 1e-9)
+    return {
+        symbol: ((bp - base[symbol]) / hours if symbol in base else 0.0)
+        for symbol, bp in snapshot.items()
+    }
+
+
+def fetch_premium_index_all() -> dict[str, dict[str, float]]:
+    """Per-symbol premium level and rate-of-change; {} on any failure.
+
+    Uncached on purpose: the callers (build_metrics) are themselves
+    st.cache_data-wrapped, so this runs once per scan and each run feeds
+    the RoC buffer exactly once.
+    """
+    try:
+        raw = _get_json("/fapi/v1/premiumIndex", timeout=20)
+    except Exception:
+        return {}
+    snapshot = _premium_snapshot_from_raw(raw)
+    if not snapshot:
+        return {}
+    now = _utc_now_naive()
+    with _PREMIUM_HISTORY_LOCK:
+        _PREMIUM_HISTORY.append((now, snapshot))
+        cutoff = now - pd.Timedelta(seconds=PREMIUM_HISTORY_MAX_AGE_S)
+        while _PREMIUM_HISTORY and _PREMIUM_HISTORY[0][0] < cutoff:
+            _PREMIUM_HISTORY.pop(0)
+        history = list(_PREMIUM_HISTORY)
+    roc = _premium_roc_from_history(history, snapshot, now)
+    return {
+        symbol: {"premium_bp": bp, "premium_roc_bp_h": roc.get(symbol, 0.0)}
+        for symbol, bp in snapshot.items()
+    }
+def _fetch_symbol_context(symbol: str) -> tuple[str, Optional[pd.DataFrame], float, float, float, float, float, float]:
     try:
         klines = _fetch_klines(symbol)
-        oi_value, oi_change = _fetch_open_interest_hist(symbol)
+        oi_value, oi_change, oi_trend = _fetch_open_interest_hist(symbol)
         funding_rate, funding_cumulative, funding_trend = _fetch_funding_history(symbol)
-        return symbol, klines, oi_value, oi_change, funding_rate, funding_cumulative, funding_trend
+        return symbol, klines, oi_value, oi_change, oi_trend, funding_rate, funding_cumulative, funding_trend
     except Exception:
-        return symbol, None, 0.0, 0.0, 0.0, 0.0, 0.0
+        return symbol, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_symbol_contexts(symbols: tuple[str, ...]) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(_fetch_symbol_context, symbol): symbol for symbol in symbols}
         for fut in as_completed(futures):
-            symbol, klines, oi_value, oi_change, funding_rate, funding_cumulative, funding_trend = fut.result()
+            symbol, klines, oi_value, oi_change, oi_trend, funding_rate, funding_cumulative, funding_trend = fut.result()
             if klines is not None:
                 out[symbol] = {
                     "klines": klines,
                     "oi_value": oi_value,
                     "oi_change": oi_change,
+                    "oi_trend": oi_trend,
                     "funding_rate": funding_rate,
                     "funding_cumulative_7d": funding_cumulative,
                     "funding_trend": funding_trend,

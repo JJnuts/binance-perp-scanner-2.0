@@ -953,7 +953,10 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
             "volume_z_1h",
             "overextension_score",
             "oi_change_1h",
+            "oi_trend_raw",
             "oi_score",
+            "premium_bp",
+            "premium_roc_bp_h",
             "relative_strength_score",
             "rs_1h",
             "rs_4h",
@@ -964,7 +967,7 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
             "alpha_24h",
             "overall_htf_strength",
         ]
-        percent_cols = ["rs_1h", "rs_4h", "rs_24h", "alpha_4h", "alpha_24h", "oi_change_1h"]
+        percent_cols = ["rs_1h", "rs_4h", "rs_24h", "alpha_4h", "alpha_24h", "oi_change_1h", "oi_trend_raw"]
         table_df = df.copy()
         table_df["overall_htf_strength"] = table_df["htf_momentum_score"]
         column_config = {
@@ -977,7 +980,10 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
             "volume_z_1h": st.column_config.NumberColumn("Vol Z", format="%.2f", help=_term_help("Vol Z")),
             "overextension_score": st.column_config.NumberColumn("Overext", format="%.1f", help=_term_help("Overext")),
             "oi_change_1h": st.column_config.TextColumn("OI 1H", help=_term_help("OI 1H")),
+            "oi_trend_raw": st.column_config.TextColumn("OI Trend", help=_term_help("OI Trend")),
             "oi_score": st.column_config.NumberColumn("OI Score", format="%.1f", help=_term_help("OI Score")),
+            "premium_bp": st.column_config.NumberColumn("Premium bp", format="%.1f", help=_term_help("Premium")),
+            "premium_roc_bp_h": st.column_config.NumberColumn("Prem RoC", format="%.1f", help=_term_help("Premium RoC")),
             "relative_strength_score": st.column_config.NumberColumn("RS Score", format="%.1f", help=_term_help("RS Score")),
             "rs_1h": st.column_config.TextColumn("RS 1H", help=_term_help("RS 1H")),
             "rs_4h": st.column_config.TextColumn("RS 4H", help=_term_help("RS 4H")),
