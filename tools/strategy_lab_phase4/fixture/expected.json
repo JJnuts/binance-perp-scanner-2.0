@@ -1,0 +1,45 @@
+{
+  "rows": 560,
+  "start": "2025-12-30T12:50:00Z",
+  "end": "2026-01-01T11:30:00Z",
+  "candidate_signal_indices": [
+    515,
+    520,
+    535
+  ],
+  "expected_trades": [
+    {
+      "signal_index": 515,
+      "open_index": 516,
+      "close_index": 528,
+      "open_timestamp": 1767253800000,
+      "close_timestamp": 1767257400000,
+      "open_rate": 151.58,
+      "close_rate": 152.78,
+      "trade_duration_minutes": 60,
+      "funding_payment_count": 1,
+      "funding_rate": 0.0001,
+      "funding_mark_price": 151.8
+    },
+    {
+      "signal_index": 535,
+      "open_index": 536,
+      "close_index": 548,
+      "open_timestamp": 1767259800000,
+      "close_timestamp": 1767263400000,
+      "open_rate": 153.58,
+      "close_rate": 154.78,
+      "trade_duration_minutes": 60,
+      "funding_payment_count": 0,
+      "funding_rate": 0.0,
+      "funding_mark_price": null
+    }
+  ],
+  "overlap_skipped_signal_indices": [
+    520
+  ],
+  "fixed_notional": 1000.0,
+  "fee_rate_per_side": 0.0004,
+  "slippage_rate_per_side": 0.00015,
+  "funding_timestamp": 1767254400000
+}

@@ -139,6 +139,8 @@ def _spot_flow_summary(df: pd.DataFrame, premium_df: pd.DataFrame, etf_tape: dic
             )
 
     etf_summary = etf_tape.get("summary", {}) if isinstance(etf_tape, dict) else {}
+    if not isinstance(etf_summary, dict):
+        etf_summary = {}
     etf_ratio = _safe_float(etf_summary.get("latest_proxy_ratio"), np.nan)
 
     if has_flow and cvd_delta > 0 and abs(price_delta) < 0.01:

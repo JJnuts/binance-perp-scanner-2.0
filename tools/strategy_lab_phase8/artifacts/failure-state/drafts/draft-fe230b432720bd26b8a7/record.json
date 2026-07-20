@@ -1,0 +1,334 @@
+{
+  "created_at_utc": "2026-07-16T23:45:32.501495+00:00",
+  "draft": {
+    "accepted_review_groups": [
+      "costs_and_sizing",
+      "entry_independence",
+      "market_data",
+      "outcomes",
+      "reporting",
+      "signal_definition",
+      "validation"
+    ],
+    "base_contract": {
+      "contract_version": "0.1.0",
+      "data": {
+        "bar_policy": "closed_only",
+        "cache_policy": "immutable_raw",
+        "detail_timeframe": "1m",
+        "end": "2026-07-01T00:00:00Z",
+        "source": "binance_public_api",
+        "start": "2024-07-01T00:00:00Z",
+        "timeframe": "5m",
+        "timezone": "UTC",
+        "warmup_bars": 500
+      },
+      "entry": {
+        "cooldown_bars": 12,
+        "overlapping_positions": "skip",
+        "price": "open",
+        "timing": "next_bar_open"
+      },
+      "execution": {
+        "fee_bps_per_side": 4.0,
+        "funding": {
+          "include": true,
+          "source": "binance_historical_funding"
+        },
+        "position_sizing": {
+          "model": "fixed_notional",
+          "value": 1000.0
+        },
+        "slippage_bps_per_side": 1.5
+      },
+      "experiment": {
+        "hypothesis": "After approaching EMA 9 from above and closing back above it, BTCUSDT has positive net forward expectancy and reaches a 0.5 percent target before a 0.5 percent stop more often than the unconditional baseline.",
+        "id": "btcusdt-5m-ema9-bounce-v1",
+        "name": "BTCUSDT 5m EMA 9 long-bounce event study",
+        "notes": "Reference fixture for Strategy Lab. Parameters are explicit test inputs, not recommended trading defaults.",
+        "revision": 1
+      },
+      "market": {
+        "direction": "long",
+        "exchange": "binance",
+        "symbols": [
+          "BTCUSDT"
+        ],
+        "venue": "usd_m_futures"
+      },
+      "outcome": {
+        "barrier": {
+          "fallback_resolution": "unresolved",
+          "max_holding_bars": 12,
+          "same_bar_resolution": "lower_timeframe_replay",
+          "stop_pct": 0.5,
+          "target_pct": 0.5
+        },
+        "forward_horizons_bars": [
+          1,
+          3,
+          6,
+          12
+        ],
+        "mode": "both"
+      },
+      "reporting": {
+        "confidence_intervals": true,
+        "export_formats": [
+          "json",
+          "csv",
+          "html"
+        ],
+        "include_event_or_trade_log": true,
+        "include_reproducibility_manifest": true,
+        "metrics": [
+          "event_count",
+          "resolved_event_count",
+          "success_rate",
+          "mean_forward_return",
+          "median_forward_return",
+          "expectancy",
+          "regime_breakdown",
+          "subperiod_breakdown"
+        ],
+        "probability_label": "historical_empirical_rate"
+      },
+      "research": {
+        "engine": "vectorbt",
+        "type": "event_study"
+      },
+      "signal": {
+        "context_filters": [],
+        "event": {
+          "approach": "from_above",
+          "confirmation": "close_above_average",
+          "max_penetration_bps": 15.0,
+          "min_rejection_bps": 0.0,
+          "precondition_bars": 3,
+          "probe_field": "low",
+          "touch_tolerance_bps": 5.0,
+          "type": "moving_average_bounce"
+        },
+        "indicator": {
+          "kind": "ema",
+          "length": 9,
+          "price_source": "close"
+        }
+      },
+      "validation": {
+        "bootstrap_samples": 10000,
+        "confidence_level": 0.95,
+        "embargo_bars": 12,
+        "final_holdout_locked": true,
+        "method": "anchored_walk_forward",
+        "minimum_events": 200,
+        "multiple_testing_correction": "benjamini_hochberg",
+        "purge_bars": 12,
+        "random_seed": 144,
+        "selection_scope": "training_and_validation_only",
+        "splits": {
+          "final_holdout": 0.2,
+          "training": 0.6,
+          "validation": 0.2
+        }
+      }
+    },
+    "base_contract_sha256": "a05aa70a8037b1c3290505d944a6e2fc470d1dd7ac8a6075d07b1103ec7714f9",
+    "candidate_contract": {
+      "contract_version": "0.1.0",
+      "data": {
+        "bar_policy": "closed_only",
+        "cache_policy": "immutable_raw",
+        "detail_timeframe": "1m",
+        "end": "2026-07-01T00:00:00Z",
+        "source": "binance_public_api",
+        "start": "2024-07-01T00:00:00Z",
+        "timeframe": "5m",
+        "timezone": "UTC",
+        "warmup_bars": 500
+      },
+      "entry": {
+        "cooldown_bars": 12,
+        "overlapping_positions": "skip",
+        "price": "open",
+        "timing": "next_bar_open"
+      },
+      "execution": {
+        "fee_bps_per_side": 5.0,
+        "funding": {
+          "include": true,
+          "source": "binance_historical_funding"
+        },
+        "position_sizing": {
+          "model": "fixed_notional",
+          "value": 1000.0
+        },
+        "slippage_bps_per_side": 1.5
+      },
+      "experiment": {
+        "hypothesis": "After approaching EMA 9 from above and closing back above it, BTCUSDT has positive net forward expectancy and reaches a 0.5 percent target before a 0.5 percent stop more often than the unconditional baseline.",
+        "id": "btcusdt-5m-ema9-bounce-v1",
+        "name": "BTCUSDT 5m EMA 9 long-bounce event study",
+        "notes": "Reference fixture for Strategy Lab. Parameters are explicit test inputs, not recommended trading defaults.",
+        "revision": 2
+      },
+      "market": {
+        "direction": "long",
+        "exchange": "binance",
+        "symbols": [
+          "BTCUSDT"
+        ],
+        "venue": "usd_m_futures"
+      },
+      "outcome": {
+        "barrier": {
+          "fallback_resolution": "unresolved",
+          "max_holding_bars": 12,
+          "same_bar_resolution": "lower_timeframe_replay",
+          "stop_pct": 0.5,
+          "target_pct": 0.5
+        },
+        "forward_horizons_bars": [
+          1,
+          3,
+          6,
+          12
+        ],
+        "mode": "both"
+      },
+      "reporting": {
+        "confidence_intervals": true,
+        "export_formats": [
+          "json",
+          "csv",
+          "html"
+        ],
+        "include_event_or_trade_log": true,
+        "include_reproducibility_manifest": true,
+        "metrics": [
+          "event_count",
+          "resolved_event_count",
+          "success_rate",
+          "mean_forward_return",
+          "median_forward_return",
+          "expectancy",
+          "regime_breakdown",
+          "subperiod_breakdown"
+        ],
+        "probability_label": "historical_empirical_rate"
+      },
+      "research": {
+        "engine": "vectorbt",
+        "type": "event_study"
+      },
+      "signal": {
+        "context_filters": [],
+        "event": {
+          "approach": "from_above",
+          "confirmation": "close_above_average",
+          "max_penetration_bps": 15.0,
+          "min_rejection_bps": 0.0,
+          "precondition_bars": 3,
+          "probe_field": "low",
+          "touch_tolerance_bps": 5.0,
+          "type": "moving_average_bounce"
+        },
+        "indicator": {
+          "kind": "ema",
+          "length": 9,
+          "price_source": "close"
+        }
+      },
+      "validation": {
+        "bootstrap_samples": 10000,
+        "confidence_level": 0.95,
+        "embargo_bars": 12,
+        "final_holdout_locked": true,
+        "method": "anchored_walk_forward",
+        "minimum_events": 200,
+        "multiple_testing_correction": "benjamini_hochberg",
+        "purge_bars": 12,
+        "random_seed": 144,
+        "selection_scope": "training_and_validation_only",
+        "splits": {
+          "final_holdout": 0.2,
+          "training": 0.6,
+          "validation": 0.2
+        }
+      }
+    },
+    "candidate_contract_sha256": "875858a61ea39ecff26d3ef6dea12af1a0abce6e3374bb38854b43c6ef94d935",
+    "contract_diff": [
+      {
+        "after": 5.0,
+        "before": 4.0,
+        "path": "/execution/fee_bps_per_side"
+      },
+      {
+        "after": 2,
+        "before": 1,
+        "path": "/experiment/revision"
+      }
+    ],
+    "draft_sha256": "fe230b432720bd26b8a7eefee4356a8c3d61bf505d6b4da2803608a967347d5a",
+    "engine_version": "0.1.1",
+    "explicit_paths": [
+      "/data/timeframe",
+      "/execution/fee_bps_per_side",
+      "/market/direction",
+      "/market/symbols",
+      "/signal/indicator/kind",
+      "/signal/indicator/length"
+    ],
+    "extractions": [
+      {
+        "evidence": "BTCUSDT",
+        "path": "/market/symbols",
+        "value": [
+          "BTCUSDT"
+        ]
+      },
+      {
+        "evidence": "BTCUSDT 5m",
+        "path": "/data/timeframe",
+        "value": "5m"
+      },
+      {
+        "evidence": "EMA9",
+        "path": "/signal/indicator/kind",
+        "value": "ema"
+      },
+      {
+        "evidence": "EMA9",
+        "path": "/signal/indicator/length",
+        "value": 9
+      },
+      {
+        "evidence": "long",
+        "path": "/market/direction",
+        "value": "long"
+      },
+      {
+        "evidence": "fees 5 bps per side",
+        "path": "/execution/fee_bps_per_side",
+        "value": 5.0
+      }
+    ],
+    "prompt": "Revise the long BTCUSDT 5m EMA9 bounce with fees 5 bps per side using all remaining frozen reference settings.",
+    "prompt_sha256": "f4493ff529253bf446605a650f3ed26ebe5d83e660c7e7b9f2e6d0a60c2b459a",
+    "questions": [],
+    "status": "ready_for_confirmation",
+    "warnings": [
+      "This draft cannot execute research or trading.",
+      "The final holdout remains locked and unopened.",
+      "Confirmation is bound to the exact candidate contract checksum."
+    ]
+  },
+  "draft_id": "draft-fe230b432720bd26b8a7",
+  "prompt": "Revise the long BTCUSDT 5m EMA9 bounce with fees 5 bps per side using all remaining frozen reference settings.",
+  "prompt_status": "ready_for_confirmation",
+  "record_type": "prompt_draft",
+  "record_version": "0.1.0",
+  "state": "draft",
+  "updated_at_utc": "2026-07-16T23:45:32.501495+00:00"
+}

@@ -2,4 +2,6 @@ __pycache__/
 tests/__pycache__/
 data/*.csv
 data/*.sqlite
+data/strategy_lab/
 .streamlit/secrets.toml
+tools/strategy_lab_phase9/artifacts/

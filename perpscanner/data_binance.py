@@ -284,8 +284,16 @@ def fetch_premium_index_all() -> dict[str, dict[str, float]]:
             _PREMIUM_HISTORY.pop(0)
         history = list(_PREMIUM_HISTORY)
     roc = _premium_roc_from_history(history, snapshot, now)
+    next_funding = {
+        str(item.get("symbol", "")): _safe_float(item.get("nextFundingTime"))
+        for item in raw
+    } if isinstance(raw, list) else {}
     return {
-        symbol: {"premium_bp": bp, "premium_roc_bp_h": roc.get(symbol, 0.0)}
+        symbol: {
+            "premium_bp": bp,
+            "premium_roc_bp_h": roc.get(symbol, 0.0),
+            "next_funding_ms": next_funding.get(symbol, 0.0),
+        }
         for symbol, bp in snapshot.items()
     }
 def _fetch_symbol_context(symbol: str) -> tuple[str, Optional[pd.DataFrame], float, float, float, float, float, float]:
@@ -435,13 +443,28 @@ def _fetch_binance_btc_open_interest_hist(period: str = "5m", limit: int = 100) 
     df["oi_contracts"] = df["sumOpenInterest"].astype(float)
     df["oi_value"] = df["sumOpenInterestValue"].astype(float)
     return df[["ts", "oi_contracts", "oi_value"]].sort_values("ts")
+def _btc_funding_z(predicted_rate: float, look: int = 90) -> float:
+    """Predicted rate vs its own trailing settled regime (z-score). A rate is
+    only 'extreme' relative to recent variance, never in absolute isolation;
+    absolute economic size is judged separately by the caller (hybrid label)."""
+    raw = _get_json("/fapi/v1/fundingRate", params={"symbol": BTC_SYMBOL, "limit": look + 1}, timeout=12)
+    if not isinstance(raw, list) or len(raw) < look:
+        return 0.0
+    rates = [float(item.get("fundingRate", 0.0) or 0.0) for item in raw][-look:]
+    mean = float(np.mean(rates))
+    std = float(np.std(rates))
+    if std <= 0:
+        return 0.0
+    return (predicted_rate - mean) / std
 def _fetch_binance_btc_perp_snapshot() -> dict[str, float]:
     premium = _get_json("/fapi/v1/premiumIndex", params={"symbol": BTC_SYMBOL}, timeout=20)
     open_interest = _get_json("/fapi/v1/openInterest", params={"symbol": BTC_SYMBOL}, timeout=20)
+    last_funding_rate = _safe_float(premium.get("lastFundingRate"))
     return {
         "mark_price": _safe_float(premium.get("markPrice")),
         "index_price": _safe_float(premium.get("indexPrice")),
-        "last_funding_rate": _safe_float(premium.get("lastFundingRate")),
+        "last_funding_rate": last_funding_rate,
+        "funding_z": _btc_funding_z(last_funding_rate),
         "next_funding_time": _safe_float(premium.get("nextFundingTime")),
         "open_interest_contracts": _safe_float(open_interest.get("openInterest")),
     }

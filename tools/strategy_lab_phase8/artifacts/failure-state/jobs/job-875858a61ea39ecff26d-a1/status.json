@@ -1,0 +1,16 @@
+{
+  "attempt": 1,
+  "confirmation_id": "confirmed-7181797690b4b2454a4c",
+  "confirmed_contract_sha256": "875858a61ea39ecff26d3ef6dea12af1a0abce6e3374bb38854b43c6ef94d935",
+  "created_at_utc": "2026-07-16T23:45:32.561410+00:00",
+  "error_message": "Phase 8 executes only the frozen reference contract; confirmed revisions require a later pipeline capability",
+  "error_type": "Phase8JobCapabilityError",
+  "failed_at_utc": "2026-07-16T23:45:33.908604+00:00",
+  "job_id": "job-875858a61ea39ecff26d-a1",
+  "record_type": "ui_job",
+  "record_version": "0.1.0",
+  "started_at_utc": "2026-07-16T23:45:33.861705+00:00",
+  "state": "failed",
+  "updated_at_utc": "2026-07-16T23:45:33.908623+00:00",
+  "worker_pid": 67
+}

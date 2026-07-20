@@ -266,6 +266,7 @@ def _front_gex_summary(options_df: pd.DataFrame, spot: float, max_hours: float, 
             "top_strike": 0.0,
             "top_distance_pct": 0.0,
             "top_abs_gex": 0.0,
+            "zero_crossing": None,
             "strike_map": _strike_map_for_options(front),
         }
     strike_map = _strike_map_for_options(front)
@@ -281,6 +282,10 @@ def _front_gex_summary(options_df: pd.DataFrame, spot: float, max_hours: float, 
         "top_strike": top_strike,
         "top_distance_pct": ((top_strike / spot) - 1.0) * 100.0 if spot > 0 else 0.0,
         "top_abs_gex": _safe_float(top.get("abs_gex")),
+        # cumulative-GEX zero-crossing within THIS expiry window only.
+        # Same proxy caveat as the full-chain flip: current signed GEX summed
+        # by strike, not a repriced-chain gamma flip.
+        "zero_crossing": _find_gamma_flip(strike_map.sort_values("strike").reset_index(drop=True)),
         "strike_map": strike_map,
     }
 def _pin_candidate(options_df: pd.DataFrame, spot: float) -> dict[str, object]:
@@ -373,7 +378,7 @@ def _pressure_forecast(options_df: pd.DataFrame, iv_change_points: float = 0.0) 
         "charm_proxy": charm_proxy,
         "vanna_proxy": vanna_proxy,
         "pressure_bias": bias,
-        "pressure_copy": f"Estimated next-8h dealer pressure: {bias}. Charm proxy {charm_proxy:+.2f}, vanna proxy {vanna_proxy:+.2f}. Treat as an estimate, not exact dealer inventory.",
+        "pressure_copy": f"8h chain delta-drift proxy: {bias}. Charm proxy {charm_proxy:+.2f}, vanna proxy {vanna_proxy:+.2f}. Computed from unsigned OI with an assumed positioning convention — dealer inventory direction is inferred, not observed.",
     }
 def _read_options_history() -> pd.DataFrame:
     try:

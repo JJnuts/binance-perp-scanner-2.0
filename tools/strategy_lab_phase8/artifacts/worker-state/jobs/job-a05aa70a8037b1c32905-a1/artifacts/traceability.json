@@ -1,0 +1,623 @@
+{
+  "all_contract_refs_verified": true,
+  "all_metrics_labeled": true,
+  "all_sources_checksum_verified": true,
+  "all_values_pointer_verified": true,
+  "metric_count": 56,
+  "metrics": [
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "accepted_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/accepted_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "development_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/development_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "hidden_holdout_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/final_holdout_event_count_hidden",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "resolved_barrier_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/resolved_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "target_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/target_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "historical_success_rate",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/historical_empirical_success_rate",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "ambiguous_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/ambiguous_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "overlap_skipped_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/overlap_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "cooldown_skipped_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/cooldown_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "metric_id": "incomplete_outcome_events",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/incomplete_outcome_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "metric_id": "walk_forward_fold_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/fold_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "metric_id": "corrected_hypothesis_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/multiple_testing/hypothesis_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "metric_id": "corrected_positive_hypotheses",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/multiple_testing/rejected_hypothesis_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "metric_id": "adversarial_checks_rejected",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/adversarial_checks/rejected_check_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "metric_id": "holdout_opened",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/holdout/holdout_opened",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_median_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_mean_ci_low",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_mean_ci_high",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_one_sided_p_value",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_1_effective_sample_size",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_median_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_mean_ci_low",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_mean_ci_high",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_one_sided_p_value",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_3_effective_sample_size",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_median_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_mean_ci_low",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_mean_ci_high",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_one_sided_p_value",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_6_effective_sample_size",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_median_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_mean_ci_low",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_mean_ci_high",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_one_sided_p_value",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "metric_id": "forward_12_effective_sample_size",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_training_event_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/training/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_validation_event_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/validation/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_training_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/training/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_validation_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/validation/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_purged_training_events",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/purged_training_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-1_embargoed_validation_events",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/embargoed_validation_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_training_event_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/training/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_validation_event_count",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/validation/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_training_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/training/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_validation_mean_net_return",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/validation/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_purged_training_events",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/purged_training_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "metric_id": "fold-2_embargoed_validation_events",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/embargoed_validation_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "contract_refs": [
+        "/execution/fee_bps_per_side"
+      ],
+      "metric_id": "fee_bps_per_side",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/fee_bps_per_side",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "contract_refs": [
+        "/execution/slippage_bps_per_side"
+      ],
+      "metric_id": "slippage_bps_per_side",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/slippage_bps_per_side",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "contract_refs": [
+        "/execution/position_sizing/value"
+      ],
+      "metric_id": "fixed_notional",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/position_sizing/value",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "contract_refs": [
+        "/validation/minimum_events"
+      ],
+      "metric_id": "minimum_events",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/validation/minimum_events",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "contract_refs": [
+        "/validation/bootstrap_samples"
+      ],
+      "metric_id": "bootstrap_samples",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/validation/bootstrap_samples",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    }
+  ],
+  "report_version": "0.1.0",
+  "source_artifacts": [
+    {
+      "path": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "role": "contract",
+      "sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "path": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "role": "phase3_summary",
+      "sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "path": "tools/strategy_lab_phase3/artifacts/pandas/run-manifest.json",
+      "role": "phase3_manifest",
+      "sha256": "d3e77f99aef146434bd2963c7c94156a204b87e620181bedea707a9196c66cfd"
+    },
+    {
+      "path": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "role": "phase5_report",
+      "sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "path": "tools/strategy_lab_phase5/artifacts/run-manifest.json",
+      "role": "phase5_manifest",
+      "sha256": "3266c517638ae4e7067ed123112ceeaa698561ba6b0a14bc3fec9be2662e23ed"
+    }
+  ],
+  "status": "passed",
+  "unique_metric_count": 56
+}

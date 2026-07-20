@@ -1,0 +1,49 @@
+name: strategy-lab-phase3
+
+x-study-common: &study-common
+  image: strategy-lab-vectorbt:0.28.5-phase1
+  cpus: 2.0
+  mem_limit: 2g
+  pids_limit: 256
+  read_only: true
+  network_mode: none
+  security_opt:
+    - no-new-privileges:true
+  environment:
+    PYTHONPATH: /repo
+    NUMBA_CACHE_DIR: /tmp/numba-cache
+  tmpfs:
+    - /tmp:size=256m
+  entrypoint:
+    - python
+  volumes:
+    - ../..:/repo:ro
+    - ./artifacts:/artifacts
+
+services:
+  pandas-reference:
+    <<: *study-common
+    command:
+      - /repo/tools/strategy_lab_phase3/run_event_study.py
+      - --backend
+      - pandas
+      - --output
+      - /artifacts/pandas
+      - --repo-root
+      - /repo
+
+  vectorbt-study:
+    <<: *study-common
+    command:
+      - /repo/tools/strategy_lab_phase3/run_event_study.py
+      - --backend
+      - vectorbt
+      - --output
+      - /artifacts/vectorbt
+      - --repo-root
+      - /repo
+
+  compare-results:
+    <<: *study-common
+    command:
+      - /repo/tools/strategy_lab_phase3/compare_results.py

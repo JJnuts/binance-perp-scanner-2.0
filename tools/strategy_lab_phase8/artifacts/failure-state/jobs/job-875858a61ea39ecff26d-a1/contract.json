@@ -1,0 +1,123 @@
+{
+  "contract_version": "0.1.0",
+  "data": {
+    "bar_policy": "closed_only",
+    "cache_policy": "immutable_raw",
+    "detail_timeframe": "1m",
+    "end": "2026-07-01T00:00:00Z",
+    "source": "binance_public_api",
+    "start": "2024-07-01T00:00:00Z",
+    "timeframe": "5m",
+    "timezone": "UTC",
+    "warmup_bars": 500
+  },
+  "entry": {
+    "cooldown_bars": 12,
+    "overlapping_positions": "skip",
+    "price": "open",
+    "timing": "next_bar_open"
+  },
+  "execution": {
+    "fee_bps_per_side": 5.0,
+    "funding": {
+      "include": true,
+      "source": "binance_historical_funding"
+    },
+    "position_sizing": {
+      "model": "fixed_notional",
+      "value": 1000.0
+    },
+    "slippage_bps_per_side": 1.5
+  },
+  "experiment": {
+    "hypothesis": "After approaching EMA 9 from above and closing back above it, BTCUSDT has positive net forward expectancy and reaches a 0.5 percent target before a 0.5 percent stop more often than the unconditional baseline.",
+    "id": "btcusdt-5m-ema9-bounce-v1",
+    "name": "BTCUSDT 5m EMA 9 long-bounce event study",
+    "notes": "Reference fixture for Strategy Lab. Parameters are explicit test inputs, not recommended trading defaults.",
+    "revision": 2
+  },
+  "market": {
+    "direction": "long",
+    "exchange": "binance",
+    "symbols": [
+      "BTCUSDT"
+    ],
+    "venue": "usd_m_futures"
+  },
+  "outcome": {
+    "barrier": {
+      "fallback_resolution": "unresolved",
+      "max_holding_bars": 12,
+      "same_bar_resolution": "lower_timeframe_replay",
+      "stop_pct": 0.5,
+      "target_pct": 0.5
+    },
+    "forward_horizons_bars": [
+      1,
+      3,
+      6,
+      12
+    ],
+    "mode": "both"
+  },
+  "reporting": {
+    "confidence_intervals": true,
+    "export_formats": [
+      "json",
+      "csv",
+      "html"
+    ],
+    "include_event_or_trade_log": true,
+    "include_reproducibility_manifest": true,
+    "metrics": [
+      "event_count",
+      "resolved_event_count",
+      "success_rate",
+      "mean_forward_return",
+      "median_forward_return",
+      "expectancy",
+      "regime_breakdown",
+      "subperiod_breakdown"
+    ],
+    "probability_label": "historical_empirical_rate"
+  },
+  "research": {
+    "engine": "vectorbt",
+    "type": "event_study"
+  },
+  "signal": {
+    "context_filters": [],
+    "event": {
+      "approach": "from_above",
+      "confirmation": "close_above_average",
+      "max_penetration_bps": 15.0,
+      "min_rejection_bps": 0.0,
+      "precondition_bars": 3,
+      "probe_field": "low",
+      "touch_tolerance_bps": 5.0,
+      "type": "moving_average_bounce"
+    },
+    "indicator": {
+      "kind": "ema",
+      "length": 9,
+      "price_source": "close"
+    }
+  },
+  "validation": {
+    "bootstrap_samples": 10000,
+    "confidence_level": 0.95,
+    "embargo_bars": 12,
+    "final_holdout_locked": true,
+    "method": "anchored_walk_forward",
+    "minimum_events": 200,
+    "multiple_testing_correction": "benjamini_hochberg",
+    "purge_bars": 12,
+    "random_seed": 144,
+    "selection_scope": "training_and_validation_only",
+    "splits": {
+      "final_holdout": 0.2,
+      "training": 0.6,
+      "validation": 0.2
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "attempt": 1,
+  "confirmation_checksum": "ac2658deac689b4ca318dd42c6ee2356a80e720a1c0f318eeed7c9b9ea44da3a",
+  "confirmation_id": "confirmed-ac2658deac689b4ca318",
+  "confirmed_contract_sha256": "a05aa70a8037b1c3290505d944a6e2fc470d1dd7ac8a6075d07b1103ec7714f9",
+  "created_at_utc": "2026-07-16T23:45:30.431287+00:00",
+  "execution_authorized": false,
+  "holdout_open_authorized": false,
+  "job_id": "job-a05aa70a8037b1c32905-a1",
+  "record_version": "0.1.0",
+  "reference_pipeline_only": true
+}

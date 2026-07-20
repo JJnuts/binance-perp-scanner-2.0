@@ -1,0 +1,123 @@
+{
+  "contract_version": "0.1.0",
+  "experiment": {
+    "id": "btcusdt-5m-ema9-bounce-v1",
+    "revision": 1,
+    "name": "BTCUSDT 5m EMA 9 long-bounce event study",
+    "hypothesis": "After approaching EMA 9 from above and closing back above it, BTCUSDT has positive net forward expectancy and reaches a 0.5 percent target before a 0.5 percent stop more often than the unconditional baseline.",
+    "notes": "Reference fixture for Strategy Lab. Parameters are explicit test inputs, not recommended trading defaults."
+  },
+  "research": {
+    "type": "event_study",
+    "engine": "vectorbt"
+  },
+  "market": {
+    "exchange": "binance",
+    "venue": "usd_m_futures",
+    "symbols": [
+      "BTCUSDT"
+    ],
+    "direction": "long"
+  },
+  "data": {
+    "source": "binance_public_api",
+    "timeframe": "5m",
+    "start": "2024-07-01T00:00:00Z",
+    "end": "2026-07-01T00:00:00Z",
+    "timezone": "UTC",
+    "bar_policy": "closed_only",
+    "warmup_bars": 500,
+    "detail_timeframe": "1m",
+    "cache_policy": "immutable_raw"
+  },
+  "signal": {
+    "indicator": {
+      "kind": "ema",
+      "length": 9,
+      "price_source": "close"
+    },
+    "event": {
+      "type": "moving_average_bounce",
+      "approach": "from_above",
+      "precondition_bars": 3,
+      "probe_field": "low",
+      "touch_tolerance_bps": 5.0,
+      "max_penetration_bps": 15.0,
+      "confirmation": "close_above_average",
+      "min_rejection_bps": 0.0
+    },
+    "context_filters": []
+  },
+  "entry": {
+    "timing": "next_bar_open",
+    "price": "open",
+    "cooldown_bars": 12,
+    "overlapping_positions": "skip"
+  },
+  "outcome": {
+    "mode": "both",
+    "forward_horizons_bars": [
+      1,
+      3,
+      6,
+      12
+    ],
+    "barrier": {
+      "target_pct": 0.5,
+      "stop_pct": 0.5,
+      "max_holding_bars": 12,
+      "same_bar_resolution": "lower_timeframe_replay",
+      "fallback_resolution": "unresolved"
+    }
+  },
+  "execution": {
+    "fee_bps_per_side": 4.0,
+    "slippage_bps_per_side": 1.5,
+    "funding": {
+      "include": true,
+      "source": "binance_historical_funding"
+    },
+    "position_sizing": {
+      "model": "fixed_notional",
+      "value": 1000.0
+    }
+  },
+  "validation": {
+    "method": "anchored_walk_forward",
+    "splits": {
+      "training": 0.6,
+      "validation": 0.2,
+      "final_holdout": 0.2
+    },
+    "final_holdout_locked": true,
+    "minimum_events": 200,
+    "confidence_level": 0.95,
+    "bootstrap_samples": 10000,
+    "multiple_testing_correction": "benjamini_hochberg",
+    "selection_scope": "training_and_validation_only",
+    "purge_bars": 12,
+    "embargo_bars": 12,
+    "random_seed": 144
+  },
+  "reporting": {
+    "metrics": [
+      "event_count",
+      "resolved_event_count",
+      "success_rate",
+      "mean_forward_return",
+      "median_forward_return",
+      "expectancy",
+      "regime_breakdown",
+      "subperiod_breakdown"
+    ],
+    "confidence_intervals": true,
+    "include_event_or_trade_log": true,
+    "include_reproducibility_manifest": true,
+    "probability_label": "historical_empirical_rate",
+    "export_formats": [
+      "json",
+      "csv",
+      "html"
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+artifacts/
+freqtrade/user_data/backtest_results/
+freqtrade/user_data/data/

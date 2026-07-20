@@ -1,0 +1,163 @@
+{
+  "accepted_event_count": 8244,
+  "ambiguous_event_count": 4,
+  "barrier_counts": {
+    "neither": 4372,
+    "stop": 1125,
+    "target": 1141,
+    "unresolved": 2
+  },
+  "candidate_signal_count": 35014,
+  "cooldown_skipped_count": 3107,
+  "development_event_count": 6640,
+  "engine": "pandas",
+  "engine_version": "2.3.3",
+  "final_holdout_event_count_hidden": 1604,
+  "forward_returns": {
+    "1": {
+      "confidence_interval": {
+        "mean_high": -0.0010668118752539379,
+        "mean_low": -0.0011268712352491288,
+        "median_high": -0.001099395332567199,
+        "median_low": -0.0011390127598092104
+      },
+      "mean_net_return": -0.0010964058523785247,
+      "median_net_return": -0.0011168243831690128,
+      "sample_size": 6640
+    },
+    "12": {
+      "confidence_interval": {
+        "mean_high": -0.0010141001547059709,
+        "mean_low": -0.001240805070534433,
+        "median_high": -0.001093080600553829,
+        "median_low": -0.00124593216759461
+      },
+      "mean_net_return": -0.001128667342799153,
+      "median_net_return": -0.001182896275146117,
+      "sample_size": 6640
+    },
+    "3": {
+      "confidence_interval": {
+        "mean_high": -0.0010912005162738243,
+        "mean_low": -0.0011977113266079236,
+        "median_high": -0.001129600608861893,
+        "median_low": -0.0012231486939709435
+      },
+      "mean_net_return": -0.00114431689182419,
+      "median_net_return": -0.0011735408729084962,
+      "sample_size": 6640
+    },
+    "6": {
+      "confidence_interval": {
+        "mean_high": -0.00109927766829678,
+        "mean_low": -0.0012566723679860092,
+        "median_high": -0.0011622189452115128,
+        "median_low": -0.0012875919036844374
+      },
+      "mean_net_return": -0.0011792458287211282,
+      "median_net_return": -0.0012226069907468329,
+      "sample_size": 6640
+    }
+  },
+  "historical_empirical_success_rate": 0.17188912322988853,
+  "holdout_policy": "final holdout outcomes hidden",
+  "incomplete_outcome_skipped_count": 1,
+  "overlap_skipped_count": 23662,
+  "regime_breakdown": {
+    "Bear Trend": {
+      "event_count": 799,
+      "historical_empirical_success_rate": 0.17271589486858574,
+      "resolved_event_count": 799,
+      "success_rate_ci_95": [
+        0.14808774996148047,
+        0.20047603650734172
+      ],
+      "target_count": 138
+    },
+    "Bull Trend": {
+      "event_count": 1886,
+      "historical_empirical_success_rate": 0.12407211028632026,
+      "resolved_event_count": 1886,
+      "success_rate_ci_95": [
+        0.1099536177645123,
+        0.13971889133322668
+      ],
+      "target_count": 234
+    },
+    "Insufficient Daily Warmup": {
+      "event_count": 2257,
+      "historical_empirical_success_rate": 0.21143617021276595,
+      "resolved_event_count": 2256,
+      "success_rate_ci_95": [
+        0.19508439229011382,
+        0.22876899577921866
+      ],
+      "target_count": 477
+    },
+    "Range / Transition": {
+      "event_count": 1698,
+      "historical_empirical_success_rate": 0.17206835592221567,
+      "resolved_event_count": 1697,
+      "success_rate_ci_95": [
+        0.15485614305246542,
+        0.190761877823086
+      ],
+      "target_count": 292
+    }
+  },
+  "resolved_event_count": 6638,
+  "status": "passed",
+  "subperiod_breakdown": {
+    "2024-H2": {
+      "event_count": 2078,
+      "historical_empirical_success_rate": 0.2118440057775638,
+      "resolved_event_count": 2077,
+      "success_rate_ci_95": [
+        0.19481122004663493,
+        0.2299407258904701
+      ],
+      "target_count": 440
+    },
+    "2025-H1": {
+      "event_count": 2064,
+      "historical_empirical_success_rate": 0.17644207464857004,
+      "resolved_event_count": 2063,
+      "success_rate_ci_95": [
+        0.1605984678857322,
+        0.19348841947439985
+      ],
+      "target_count": 364
+    },
+    "2025-H2": {
+      "event_count": 2108,
+      "historical_empirical_success_rate": 0.1342504743833017,
+      "resolved_event_count": 2108,
+      "success_rate_ci_95": [
+        0.12036032646528866,
+        0.14947122572845795
+      ],
+      "target_count": 283
+    },
+    "2026-H1": {
+      "event_count": 390,
+      "historical_empirical_success_rate": 0.13846153846153847,
+      "resolved_event_count": 390,
+      "success_rate_ci_95": [
+        0.10769552964779175,
+        0.17628030965462324
+      ],
+      "target_count": 54
+    }
+  },
+  "success_rate_confidence_interval": [
+    0.1630034627912079,
+    0.1811543243214284
+  ],
+  "target_count": 1141,
+  "warnings": [
+    "Success rate is a historical empirical rate, not a future probability.",
+    "Final-holdout outcomes remain hidden under the frozen contract.",
+    "Two-sided hits unresolved within the same 1m candle remain excluded from resolved rates.",
+    "No parameter comparison or strategy optimization was performed."
+  ]
+}

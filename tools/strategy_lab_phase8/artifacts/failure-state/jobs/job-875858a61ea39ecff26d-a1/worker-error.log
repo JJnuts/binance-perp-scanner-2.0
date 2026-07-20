@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/repo/tools/strategy_lab_phase8/run_ui_job.py", line 54, in execute_job
+    raise Phase8JobCapabilityError(
+Phase8JobCapabilityError: Phase 8 executes only the frozen reference contract; confirmed revisions require a later pipeline capability

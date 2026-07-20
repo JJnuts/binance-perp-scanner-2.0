@@ -1,0 +1,30 @@
+name: strategy-lab-phase7
+
+services:
+  prompt-proof:
+    image: strategy-lab-vectorbt:0.28.5-phase1
+    cpus: 1.0
+    mem_limit: 768m
+    pids_limit: 128
+    read_only: true
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PYTHONPATH: /repo
+      NUMBA_CACHE_DIR: /tmp/numba-cache
+    tmpfs:
+      - /tmp:size=256m
+    entrypoint:
+      - python
+    command:
+      - /repo/tools/strategy_lab_phase7/run_prompt_suite.py
+      - --repo-root
+      - /repo
+      - --suite
+      - /repo/tools/strategy_lab_phase7/prompt-suite.json
+      - --output
+      - /artifacts
+    volumes:
+      - ../..:/repo:ro
+      - ./artifacts:/artifacts

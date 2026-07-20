@@ -1,0 +1,111 @@
+name: strategy-lab-phase4
+
+x-phase4-common: &phase4-common
+  image: freqtradeorg/freqtrade:2026.6
+  cpus: 1.0
+  mem_limit: 768m
+  pids_limit: 128
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=256m
+
+services:
+  adapter-tests:
+    <<: *phase4-common
+    entrypoint:
+      - python
+    command:
+      - -m
+      - unittest
+      - tests.test_strategy_lab_freqtrade_adapter
+      - -v
+    network_mode: none
+    environment:
+      PYTHONPATH: /repo
+    volumes:
+      - ../..:/repo:ro
+
+  compile-adapter:
+    <<: *phase4-common
+    entrypoint:
+      - python
+    command:
+      - /repo/tools/strategy_lab_phase4/compile_phase4.py
+    network_mode: none
+    environment:
+      PYTHONPATH: /repo
+      STRATEGY_LAB_REPO_ROOT: /repo
+      PHASE4_ROOT: /phase4
+    volumes:
+      - ../..:/repo:ro
+      - ./compiled:/phase4/compiled
+
+  freqtrade-prepare:
+    <<: *phase4-common
+    entrypoint:
+      - python
+    command:
+      - /repo/tools/strategy_lab_phase4/prepare_fixture.py
+    network_mode: none
+    environment:
+      PHASE4_ROOT: /phase4
+      FREQTRADE_USER_DATA: /freqtrade/user_data
+    volumes:
+      - ../..:/repo:ro
+      - ./fixture:/phase4/fixture:ro
+      - ./runtime/user_data:/freqtrade/user_data
+
+  freqtrade-backtest:
+    <<: *phase4-common
+    entrypoint:
+      - freqtrade
+    command:
+      - backtesting
+      - --config
+      - /freqtrade/user_data/config.json
+      - --strategy
+      - ApprovedEma9FixedHoldStrategy
+      - --strategy-path
+      - /freqtrade/user_data/strategies
+      - --timerange
+      - 20260101-20260102
+      - --fee
+      - "0.0004"
+      - --export
+      - trades
+      - --export-directory
+      - /freqtrade/user_data/backtest_results
+      - --cache
+      - none
+    volumes:
+      - ./runtime/user_data:/freqtrade/user_data
+
+  freqtrade-verify:
+    <<: *phase4-common
+    entrypoint:
+      - python
+    command:
+      - /repo/tools/strategy_lab_phase4/verify_result.py
+    network_mode: none
+    environment:
+      PYTHONPATH: /repo
+      PHASE4_ROOT: /phase4
+      FREQTRADE_USER_DATA: /freqtrade/user_data
+      PHASE4_ARTIFACTS: /phase4/artifacts
+    volumes:
+      - ../..:/repo:ro
+      - ./compiled:/phase4/compiled:ro
+      - ./fixture:/phase4/fixture:ro
+      - ./artifacts:/phase4/artifacts
+      - ./runtime/user_data:/freqtrade/user_data:ro
+
+  cancellation-probe:
+    <<: *phase4-common
+    entrypoint:
+      - python
+    command:
+      - -c
+      - "import time; time.sleep(300)"
+    network_mode: none

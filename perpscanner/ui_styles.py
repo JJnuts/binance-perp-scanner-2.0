@@ -56,7 +56,7 @@ def _inject_app_styles():
             h1, h2, h3 {{
                 color: var(--app-accent);
                 font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-                letter-spacing: 0.18em;
+                letter-spacing: 0;
                 font-weight: 700;
                 text-transform: uppercase;
             }}
@@ -484,6 +484,26 @@ def _inject_app_styles():
             @media (max-width: 900px) {{
                 .positioning-grid {{
                     grid-template-columns: repeat(2, minmax(0, 1fr));
+                }}
+            }}
+
+            @media (max-width: 600px) {{
+                [data-testid="stMetricValue"] {{
+                    white-space: normal;
+                    overflow: visible;
+                    overflow-wrap: anywhere;
+                    text-overflow: clip;
+                    font-size: 0.9rem;
+                    line-height: 1.25;
+                }}
+
+                [data-testid="stMetricDelta"] {{
+                    max-width: 4.5rem;
+                    font-size: 0.65rem;
+                }}
+
+                [data-testid="stMainBlockContainer"] {{
+                    padding-bottom: 6rem;
                 }}
             }}
 

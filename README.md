@@ -137,7 +137,8 @@ Every scored scan is logged to `data/research_snapshots.sqlite`
 snapshots of the same store - no lookahead - and turned into:
 
 - **Rank IC**: per-factor Spearman IC vs 1h/4h/24h forward returns with
-  t-stats, so each score has to prove it ranks future winners.
+  Newey-West-adjusted t-stats, so overlapping snapshots do not overstate
+  confidence and each score has to prove it ranks future winners.
 - **Trigger event study**: direction-adjusted returns after fresh
   ignition triggers, in excess of the same-scan cross-section.
 
@@ -149,6 +150,37 @@ py -m perpscanner.research
 
 Leave the app running on the Altcoins page so snapshots accumulate; a
 day of uptime gives a few hundred cross-sections.
+
+## Strategy Lab
+
+The sidebar's **Strategy Lab** page is a separate, offline research workflow.
+It interprets a supported question, exposes material assumptions for review,
+binds confirmation to the exact contract checksum, and submits a persisted
+external-worker job. Streamlit only reads status and artifacts, so reruns do not
+repeat long work.
+
+Phase 8 deliberately executes only the frozen BTCUSDT 5m EMA9 reference study.
+Revised contracts can be reviewed and confirmed, but remain non-runnable until
+their full pipeline capability is implemented and validated. The page never
+opens the final holdout and never authorizes live trading.
+
+To verify the page and its recoverable job lifecycle in the pinned container,
+start Docker Desktop and run:
+
+```powershell
+cd tools\strategy_lab_phase8
+powershell -ExecutionPolicy Bypass -File .\run_phase8.ps1
+```
+
+The final stress proof reuses the Phase 8 image and adds no new large Docker
+image. It exercises restartable data, concurrent isolation, cancellation,
+corruption and engine failures, app restart, resource limits, and reviewer
+reproduction:
+
+```powershell
+cd tools\strategy_lab_phase9
+powershell -ExecutionPolicy Bypass -File .\run_phase9.ps1
+```
 
 ## Websocket LTF Feed
 

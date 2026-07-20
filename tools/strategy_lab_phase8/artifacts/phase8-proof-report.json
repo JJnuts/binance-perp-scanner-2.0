@@ -1,0 +1,47 @@
+{
+  "cpu_limit": 1,
+  "holdout_opened": false,
+  "live_trading_authorized": false,
+  "memory_limit_mb": 1024,
+  "offline_runtime": true,
+  "phase": 8,
+  "research_logging_unchanged": true,
+  "safe_failure": {
+    "error_message": "Phase 8 executes only the frozen reference contract; confirmed revisions require a later pipeline capability",
+    "error_type": "Phase8JobCapabilityError",
+    "job_id": "job-875858a61ea39ecff26d-a1",
+    "recovered_after_restart": true,
+    "terminal_state": "failed"
+  },
+  "scanner_market_fetch_bypassed_on_lab_page": true,
+  "status": "passed",
+  "streamlit_autorefresh_version": "1.0.1",
+  "streamlit_flow": {
+    "job_id": "job-a05aa70a8037b1c32905-a1",
+    "metric_card_count": 4,
+    "metric_labels": [
+      "Development events evaluated",
+      "Historical empirical target-first rate",
+      "12-bar Mean net return",
+      "Final-holdout events kept hidden"
+    ],
+    "recovered_metric_card_count": 4,
+    "responsive_native_horizontal_container": true,
+    "single_job_after_rerun_and_restart": true,
+    "submit_seconds": 0.157816,
+    "terminal_state": "completed",
+    "warning_count": 2
+  },
+  "streamlit_version": "1.59.2",
+  "worker_lifecycle": {
+    "confirmation_id": "confirmed-ac2658deac689b4ca318",
+    "draft_id": "draft-d2761c4c3fc3020af286",
+    "duplicate_job_created": false,
+    "job_id": "job-a05aa70a8037b1c32905-a1",
+    "launch_seconds": 0.016206,
+    "observed_active_state": "running",
+    "recovered_after_restart": true,
+    "terminal_state": "completed",
+    "worker_pid": 23
+  }
+}

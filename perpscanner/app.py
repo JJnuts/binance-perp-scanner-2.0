@@ -60,6 +60,18 @@ def main():
             st.session_state["app_page"] = "Research"
             st.rerun()
 
+        if st.button(
+            "Strategy Lab",
+            icon=":material/science:",
+            width="stretch",
+        ):
+            st.session_state["app_page"] = "Strategy Lab"
+            st.rerun()
+
+        if st.button("🛠 Tools Hub", use_container_width=True):
+            st.session_state["app_page"] = "Tools Hub"
+            st.rerun()
+
         st.divider()
 
         with st.expander("Altcoins", expanded=page == "Altcoins"):
@@ -90,6 +102,9 @@ def main():
         elif page == "Research":
             st.divider()
             st.caption("Signal-quality report built from logged scan snapshots.")
+        elif page == "Strategy Lab":
+            st.divider()
+            st.caption("Offline, reproducible strategy research and validation.")
         elif page == "BTC Options Screener":
             st.subheader("BTC Options")
             options_anchor_mode = st.radio(
@@ -110,7 +125,7 @@ def main():
                 index=0,
             )
             bubble_timeframe = st.radio("Timeframe", ["1D", "12H", "8H"], index=0, horizontal=True)
-            bubble_lookback_days = st.slider("Days to show", 90, 1000, 365, 30)
+            bubble_lookback_days = st.slider("Days to show", 90, 1000, 365, 5)
             st.caption("Aggregated view uses public spot data from Binance, Coinbase, Bybit, OKX, and Kraken when available.")
         else:
             st.subheader("Liquidity gates")
@@ -178,6 +193,18 @@ def main():
     if page == "Research":
         st.title("Binance Perp Scanner 2.0")
         _render_research_dashboard()
+        return
+
+    if page == "Strategy Lab":
+        from .ui_strategy_lab import render_strategy_lab
+
+        render_strategy_lab()
+        return
+
+    if page == "Tools Hub":
+        from .ui_tools_hub import render_tools_hub
+
+        render_tools_hub()
         return
 
     if page == "BTC Options Screener":

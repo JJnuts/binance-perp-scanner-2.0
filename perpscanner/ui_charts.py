@@ -132,7 +132,7 @@ def _build_etf_tape_chart(df: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         template="plotly_dark",
         height=260,
-        title="BTC ETF Tape Proxy - Signed Dollar Volume, Not Reported Net Flow",
+        title="BTC ETF Tape Proxy - CLV-Signed Dollar Volume, Not Reported Net Flow",
         plot_bgcolor=APP_PANEL,
         paper_bgcolor=APP_BG,
         font_color=APP_TEXT,

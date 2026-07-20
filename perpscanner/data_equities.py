@@ -33,12 +33,24 @@ def _fetch_eodhd_etf_history(ticker: str, lookback_days: int, api_token: str) ->
         return pd.DataFrame(columns=["date", "ticker", "close", "volume", "dollar_volume", "signed_dollar_volume"])
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     close_col = "adjusted_close" if "adjusted_close" in df.columns else "close"
+    # Raw (unadjusted) close stays comparable with the session high/low;
+    # the adjusted close is only for returns.
+    df["raw_close"] = pd.to_numeric(df["close"], errors="coerce")
+    for col in ("high", "low"):
+        df[col] = pd.to_numeric(df[col], errors="coerce") if col in df.columns else np.nan
     df["close"] = pd.to_numeric(df[close_col], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
     df = df.dropna(subset=["date", "close"]).sort_values("date")
     df["session_return"] = df["close"].pct_change().fillna(0.0)
     df["dollar_volume"] = df["close"] * df["volume"]
-    df["signed_dollar_volume"] = df["dollar_volume"] * np.sign(df["session_return"])
+    # Close-location value: where the close lands in the day's range, in
+    # [-1, +1]. Signing by CLV instead of sign(return) keeps the summed
+    # cross-ETF ratio from pinning at +/-100% every session - all four
+    # funds track BTC, so their daily return signs always agree.
+    range_width = df["high"] - df["low"]
+    clv = ((df["raw_close"] - df["low"]) - (df["high"] - df["raw_close"])) / range_width
+    clv = clv.where(np.isfinite(clv) & (range_width > 0), np.sign(df["session_return"]))
+    df["signed_dollar_volume"] = df["dollar_volume"] * clv.clip(-1.0, 1.0)
     df["ticker"] = ticker
     return df[["date", "ticker", "close", "volume", "dollar_volume", "signed_dollar_volume", "session_return"]]
 def _fetch_btc_etf_tape(lookback_days: int) -> dict[str, object]:

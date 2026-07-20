@@ -47,6 +47,52 @@ CONFLUENCE_COMPONENT_COLUMNS = {
 }
 
 
+def _spearman_corr(left: pd.Series, right: pd.Series) -> float:
+    """Spearman correlation without pandas' optional SciPy dependency."""
+    paired = pd.concat(
+        [pd.to_numeric(left, errors="coerce"), pd.to_numeric(right, errors="coerce")],
+        axis=1,
+    ).dropna()
+    if len(paired) < 2:
+        return float("nan")
+    return float(paired.iloc[:, 0].rank().corr(paired.iloc[:, 1].rank()))
+
+
+def _overlap_lag(timestamps: Iterable[object], horizon_hours: float) -> int:
+    """Estimate how many adjacent scan ICs share the same return window."""
+    ts = pd.Series(pd.to_datetime(list(timestamps))).dropna().sort_values()
+    if len(ts) < 2:
+        return 0
+    spacing_s = ts.diff().dt.total_seconds().dropna()
+    spacing_s = spacing_s[spacing_s > 0]
+    if spacing_s.empty:
+        return 0
+    lag = int(np.ceil(horizon_hours * 3600.0 / float(spacing_s.median()))) - 1
+    return max(0, min(lag, len(ts) - 1))
+
+
+def _newey_west_t_stat(values: Iterable[float], max_lag: int) -> float:
+    """T-stat for a mean with Bartlett-weighted autocorrelation correction."""
+    arr = np.asarray(list(values), dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) < 2:
+        return 0.0
+    centered = arr - float(arr.mean())
+    gamma0 = float(np.dot(centered, centered) / len(arr))
+    if gamma0 <= 0.0:
+        return 0.0
+    lag_limit = max(0, min(int(max_lag), len(arr) - 1))
+    long_run_variance = gamma0
+    for lag in range(1, lag_limit + 1):
+        covariance = float(np.dot(centered[lag:], centered[:-lag]) / len(arr))
+        weight = 1.0 - lag / (lag_limit + 1.0)
+        long_run_variance += 2.0 * weight * covariance
+    if long_run_variance <= 0.0:
+        return 0.0
+    standard_error = float(np.sqrt(long_run_variance / len(arr)))
+    return float(arr.mean() / standard_error) if standard_error > 0.0 else 0.0
+
+
 def _connect() -> sqlite3.Connection:
     RESEARCH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(RESEARCH_DB_PATH)
@@ -183,26 +229,29 @@ def rank_ic_report(horizons: Iterable[float] = RESEARCH_HORIZONS_HOURS) -> pd.Da
         df = snaps.merge(fwd, on=["scan_ts", "symbol"]).dropna(subset=["fwd_ret"])
         if df.empty:
             continue
-        grouped = [g for _, g in df.groupby("scan_ts") if len(g) >= RESEARCH_MIN_GROUP_SIZE]
+        grouped = [(ts, g) for ts, g in df.groupby("scan_ts") if len(g) >= RESEARCH_MIN_GROUP_SIZE]
         for factor in factors:
             ics = []
-            for g in grouped:
+            ic_times = []
+            for scan_ts, g in grouped:
                 if g[factor].nunique() < 3:
                     continue
-                ic = g[factor].corr(g["fwd_ret"], method="spearman")
+                ic = _spearman_corr(g[factor], g["fwd_ret"])
                 if pd.notna(ic):
                     ics.append(float(ic))
+                    ic_times.append(scan_ts)
             if not ics:
                 continue
             ic_arr = np.asarray(ics)
             std = float(ic_arr.std(ddof=1)) if len(ic_arr) > 1 else 0.0
+            overlap_lag = _overlap_lag(ic_times, horizon)
             rows.append(
                 {
                     "factor": factor,
                     "horizon_h": horizon,
                     "mean_ic": float(ic_arr.mean()),
                     "ic_std": std,
-                    "t_stat": float(ic_arr.mean() / (std / np.sqrt(len(ic_arr)))) if std > 0 else 0.0,
+                    "t_stat": _newey_west_t_stat(ic_arr, overlap_lag),
                     "cross_sections": len(ic_arr),
                 }
             )
@@ -284,29 +333,32 @@ def confluence_component_ic(horizons: Iterable[float] = RESEARCH_HORIZONS_HOURS)
         if df.empty:
             continue
         df["directional_ret"] = df["fwd_ret"] * np.where(df["veto_side"] == "Long", 1.0, -1.0)
-        grouped = [g for _, g in df.groupby("scan_ts") if len(g) >= RESEARCH_WEIGHT_MIN_GROUP]
+        grouped = [(ts, g) for ts, g in df.groupby("scan_ts") if len(g) >= RESEARCH_WEIGHT_MIN_GROUP]
         for component, column in CONFLUENCE_COMPONENT_COLUMNS.items():
             if column not in df.columns:
                 continue
             ics = []
-            for g in grouped:
+            ic_times = []
+            for scan_ts, g in grouped:
                 values = pd.to_numeric(g[column], errors="coerce")
                 if values.nunique() < 3:
                     continue
-                ic = values.corr(g["directional_ret"], method="spearman")
+                ic = _spearman_corr(values, g["directional_ret"])
                 if pd.notna(ic):
                     ics.append(float(ic))
+                    ic_times.append(scan_ts)
             if not ics:
                 continue
             ic_arr = np.asarray(ics)
             std = float(ic_arr.std(ddof=1)) if len(ic_arr) > 1 else 0.0
+            overlap_lag = _overlap_lag(ic_times, horizon)
             rows.append(
                 {
                     "component": component,
                     "horizon_h": horizon,
                     "mean_ic": float(ic_arr.mean()),
                     "ic_std": std,
-                    "t_stat": float(ic_arr.mean() / (std / np.sqrt(len(ic_arr)))) if std > 0 else 0.0,
+                    "t_stat": _newey_west_t_stat(ic_arr, overlap_lag),
                     "cross_sections": len(ic_arr),
                 }
             )

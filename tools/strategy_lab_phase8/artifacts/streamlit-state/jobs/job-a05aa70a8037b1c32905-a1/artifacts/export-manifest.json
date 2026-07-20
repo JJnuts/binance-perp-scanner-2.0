@@ -1,0 +1,62 @@
+{
+  "bundle_id": "525d70fe2f9df2ce633f302c37dc1036d2ffd06b320bee0fcc0e6402be4fea2e",
+  "claim_level": "exploratory",
+  "experiment_id": "btcusdt-5m-ema9-bounce-v1",
+  "experiment_revision": 1,
+  "holdout_opened": false,
+  "inputs": [
+    {
+      "path": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "role": "contract",
+      "sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239"
+    },
+    {
+      "path": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "role": "phase3_summary",
+      "sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec"
+    },
+    {
+      "path": "tools/strategy_lab_phase3/artifacts/pandas/run-manifest.json",
+      "role": "phase3_manifest",
+      "sha256": "d3e77f99aef146434bd2963c7c94156a204b87e620181bedea707a9196c66cfd"
+    },
+    {
+      "path": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "role": "phase5_report",
+      "sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c"
+    },
+    {
+      "path": "tools/strategy_lab_phase5/artifacts/run-manifest.json",
+      "role": "phase5_manifest",
+      "sha256": "3266c517638ae4e7067ed123112ceeaa698561ba6b0a14bc3fec9be2662e23ed"
+    }
+  ],
+  "manifest_version": "0.1.0",
+  "outputs": [
+    {
+      "path": "metrics.csv",
+      "sha256": "0bed7ca96b6e3d7e6edcd79797856e45b1b8c3419a05c18c1d1ccd84e9d66b84"
+    },
+    {
+      "path": "report.html",
+      "sha256": "97b3536bc0b1411a520d525c00e4c3a00d01d02a6292b1c9a4b61751dc77d3dd"
+    },
+    {
+      "path": "results.json",
+      "sha256": "5e686f3c85d25e8ab98631fe52b0d523b11ac9b89093e921314ccab84146386e"
+    },
+    {
+      "path": "traceability.json",
+      "sha256": "df25eb51e65a60df2b7bd2820652cac357c2000562a8e01b2bcca8a1853b8713"
+    }
+  ],
+  "reproducibility": {
+    "command_template": "python tools/strategy_lab_phase6/run_export.py --repo-root <repo> --output <output> --manifest <export-manifest.json>",
+    "generated_timestamp_in_outputs": false,
+    "hash_algorithm": "sha256",
+    "mode": "byte_identical",
+    "numeric_tolerance": 0.0
+  },
+  "status": "passed",
+  "validation_conclusion": "negative"
+}

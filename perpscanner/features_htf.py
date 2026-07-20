@@ -48,6 +48,8 @@ def _daily_swing_context(daily_df: Optional[pd.DataFrame], daily_oi: pd.DataFram
     atr_percentile = float(_rolling_percentile(atr).iloc[-1]) if not atr.empty else 50.0
     volume_baseline = float(df["quote_vol"].iloc[-21:-1].mean()) if len(df) > 21 else 0.0
     volume_ratio = float(df["quote_vol"].iloc[-1] / volume_baseline) if volume_baseline > 0 else 0.0
+    if not np.isfinite(volume_ratio):
+        volume_ratio = 0.0
     volume_persistence = _consecutive_true_tail(df["quote_vol"] > df["quote_vol"].shift(1).rolling(20).mean())
 
     pivot_highs = _pivot_levels(df["high"], "high")

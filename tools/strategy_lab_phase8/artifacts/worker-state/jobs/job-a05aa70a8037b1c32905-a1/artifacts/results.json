@@ -1,0 +1,1106 @@
+{
+  "conclusion": {
+    "claim_level": "exploratory",
+    "framework_status": "passed",
+    "plain_language": "The validation framework passed, but the frozen EMA9 hypothesis had negative development evidence after declared costs. The final holdout remains unopened.",
+    "promotion_authorized": false,
+    "validation_conclusion": "negative"
+  },
+  "costs": {
+    "basis": "net after declared fees, slippage, and historical funding",
+    "funding_included": true,
+    "funding_source": "binance_historical_funding",
+    "metric_ids": [
+      "fee_bps_per_side",
+      "slippage_bps_per_side",
+      "fixed_notional",
+      "minimum_events",
+      "bootstrap_samples"
+    ]
+  },
+  "exclusions": {
+    "label": "explicitly excluded or separately counted observations",
+    "metric_ids": [
+      "ambiguous_events",
+      "overlap_skipped_events",
+      "cooldown_skipped_events",
+      "incomplete_outcome_events"
+    ]
+  },
+  "experiment": {
+    "hypothesis": "After approaching EMA 9 from above and closing back above it, BTCUSDT has positive net forward expectancy and reaches a 0.5 percent target before a 0.5 percent stop more often than the unconditional baseline.",
+    "id": "btcusdt-5m-ema9-bounce-v1",
+    "market": {
+      "direction": "long",
+      "exchange": "binance",
+      "symbols": [
+        "BTCUSDT"
+      ],
+      "venue": "usd_m_futures"
+    },
+    "name": "BTCUSDT 5m EMA 9 long-bounce event study",
+    "period": {
+      "end": "2026-07-01T00:00:00Z",
+      "start": "2024-07-01T00:00:00Z",
+      "timezone": "UTC"
+    },
+    "revision": 1,
+    "timeframe": "5m"
+  },
+  "metrics": [
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Accepted event-log rows",
+      "metric_id": "accepted_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/accepted_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 8244
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Development events evaluated",
+      "metric_id": "development_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/development_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 6640
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Final-holdout events kept hidden",
+      "metric_id": "hidden_holdout_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/final_holdout_event_count_hidden",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "final_holdout_locked",
+      "unit": "events",
+      "value": 1604
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Resolved development barrier outcomes",
+      "metric_id": "resolved_barrier_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/resolved_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 6638
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Target-first development outcomes",
+      "metric_id": "target_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/target_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 1141
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "net_after_declared_costs",
+      "label": "Historical empirical target-first rate",
+      "metric_id": "historical_success_rate",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "sample",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/historical_empirical_success_rate",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "fraction",
+      "value": 0.17188912322988853
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Ambiguous higher-timeframe events",
+      "metric_id": "ambiguous_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "exclusions",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/ambiguous_event_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 4
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Candidate events excluded by overlap policy",
+      "metric_id": "overlap_skipped_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "exclusions",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/overlap_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 23662
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Candidate events excluded by cooldown",
+      "metric_id": "cooldown_skipped_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "exclusions",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/cooldown_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 3107
+    },
+    {
+      "contract_refs": [
+        "/entry",
+        "/outcome",
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Events excluded for incomplete outcomes",
+      "metric_id": "incomplete_outcome_events",
+      "sample": "BTCUSDT 5m accepted event log",
+      "section": "exclusions",
+      "source_artifact": "tools/strategy_lab_phase3/artifacts/pandas/summary.json",
+      "source_json_pointer": "/incomplete_outcome_skipped_count",
+      "source_sha256": "4d22cbf56b554e992862c29a5396a9faf0e47bd6d90ef3b7cb4dcb84bae936ec",
+      "split": "development",
+      "unit": "events",
+      "value": 1
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Anchored walk-forward folds",
+      "metric_id": "walk_forward_fold_count",
+      "sample": "development validation process",
+      "section": "validation",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/fold_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "folds",
+      "value": 2
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Declared corrected hypotheses",
+      "metric_id": "corrected_hypothesis_count",
+      "sample": "development validation process",
+      "section": "validation",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/multiple_testing/hypothesis_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "hypotheses",
+      "value": 4
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Positive hypotheses after correction",
+      "metric_id": "corrected_positive_hypotheses",
+      "sample": "development validation process",
+      "section": "validation",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/multiple_testing/rejected_hypothesis_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "hypotheses",
+      "value": 0
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Deliberately bad inputs rejected",
+      "metric_id": "adversarial_checks_rejected",
+      "sample": "development validation process",
+      "section": "validation",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/adversarial_checks/rejected_check_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "checks",
+      "value": 5
+    },
+    {
+      "contract_refs": [
+        "/validation"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "Final holdout opened",
+      "metric_id": "holdout_opened",
+      "sample": "development validation process",
+      "section": "validation",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/holdout/holdout_opened",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "boolean",
+      "value": false
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar Mean net return",
+      "metric_id": "forward_1_mean_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0010964058523784878
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar Median net return",
+      "metric_id": "forward_1_median_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.001116824383169
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar Newey-West mean CI low",
+      "metric_id": "forward_1_mean_ci_low",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011256515886688757
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar Newey-West mean CI high",
+      "metric_id": "forward_1_mean_ci_high",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0010671601160881
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar One-sided p-value for positive mean",
+      "metric_id": "forward_1_one_sided_p_value",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "p_value",
+      "value": 1.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "1-bar Effective sample size",
+      "metric_id": "forward_1_effective_sample_size",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/1/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "events",
+      "value": 6640.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar Mean net return",
+      "metric_id": "forward_3_mean_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011443168918241623
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar Median net return",
+      "metric_id": "forward_3_median_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.00117354087290845
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar Newey-West mean CI low",
+      "metric_id": "forward_3_mean_ci_low",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011948178450998524
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar Newey-West mean CI high",
+      "metric_id": "forward_3_mean_ci_high",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0010938159385484722
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar One-sided p-value for positive mean",
+      "metric_id": "forward_3_one_sided_p_value",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "p_value",
+      "value": 1.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "3-bar Effective sample size",
+      "metric_id": "forward_3_effective_sample_size",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/3/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "events",
+      "value": 6640.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar Mean net return",
+      "metric_id": "forward_6_mean_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011792458287211058
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar Median net return",
+      "metric_id": "forward_6_median_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.00122260699074675
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar Newey-West mean CI low",
+      "metric_id": "forward_6_mean_ci_low",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0012555219961342039
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar Newey-West mean CI high",
+      "metric_id": "forward_6_mean_ci_high",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011029696613080078
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar One-sided p-value for positive mean",
+      "metric_id": "forward_6_one_sided_p_value",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "p_value",
+      "value": 1.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "6-bar Effective sample size",
+      "metric_id": "forward_6_effective_sample_size",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/6/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "events",
+      "value": 6640.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar Mean net return",
+      "metric_id": "forward_12_mean_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.001128667342799136
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar Median net return",
+      "metric_id": "forward_12_median_net_return",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/median_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0011828962751460502
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar Newey-West mean CI low",
+      "metric_id": "forward_12_mean_ci_low",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/confidence_interval/0",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0012432055176927236
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar Newey-West mean CI high",
+      "metric_id": "forward_12_mean_ci_high",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/confidence_interval/1",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "fraction",
+      "value": -0.0010141291679055483
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar One-sided p-value for positive mean",
+      "metric_id": "forward_12_one_sided_p_value",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/p_value_one_sided_greater",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "p_value",
+      "value": 1.0
+    },
+    {
+      "contract_refs": [
+        "/outcome/forward_horizons_bars",
+        "/execution",
+        "/validation"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "12-bar Effective sample size",
+      "metric_id": "forward_12_effective_sample_size",
+      "sample": "development events with available outcomes",
+      "section": "forward_returns",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/uncertainty_by_horizon/12/newey_west/effective_sample_size",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training_and_validation_only",
+      "unit": "events",
+      "value": 6544.87263483786
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-1: Training event count",
+      "metric_id": "fold-1_training_event_count",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/training/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "events",
+      "value": 4992
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-1: Validation event count",
+      "metric_id": "fold-1_validation_event_count",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/validation/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "events",
+      "value": 809
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "fold-1: Training mean net return",
+      "metric_id": "fold-1_training_mean_net_return",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/training/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "fraction",
+      "value": -0.0010764335253117074
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "fold-1: Validation mean net return",
+      "metric_id": "fold-1_validation_mean_net_return",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/validation/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "fraction",
+      "value": -0.0013856302316905338
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-1: Purged training events",
+      "metric_id": "fold-1_purged_training_events",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/purged_training_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "events",
+      "value": 2
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-1: Embargoed validation events",
+      "metric_id": "fold-1_embargoed_validation_events",
+      "sample": "anchored walk-forward fold-1",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/0/embargoed_validation_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "events",
+      "value": 1
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-2: Training event count",
+      "metric_id": "fold-2_training_event_count",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/training/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "events",
+      "value": 5804
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-2: Validation event count",
+      "metric_id": "fold-2_validation_event_count",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/validation/event_count",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "events",
+      "value": 835
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "fold-2: Training mean net return",
+      "metric_id": "fold-2_training_mean_net_return",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/training/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "fraction",
+      "value": -0.0011195016594708674
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "net_after_fee_slippage_and_funding",
+      "label": "fold-2: Validation mean net return",
+      "metric_id": "fold-2_validation_mean_net_return",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/validation/mean_net_return",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "fraction",
+      "value": -0.0011869991806246324
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-2: Purged training events",
+      "metric_id": "fold-2_purged_training_events",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/purged_training_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "training",
+      "unit": "events",
+      "value": 0
+    },
+    {
+      "contract_refs": [
+        "/validation",
+        "/execution"
+      ],
+      "cost_basis": "not_applicable",
+      "label": "fold-2: Embargoed validation events",
+      "metric_id": "fold-2_embargoed_validation_events",
+      "sample": "anchored walk-forward fold-2",
+      "section": "walk_forward",
+      "source_artifact": "tools/strategy_lab_phase5/artifacts/validation-report.json",
+      "source_json_pointer": "/walk_forward/folds/1/embargoed_validation_events",
+      "source_sha256": "6aee2ec2ab28ff11a26bc5b1bba3b62e7610138226bd798fb11caa1b67ef4a8c",
+      "split": "validation",
+      "unit": "events",
+      "value": 1
+    },
+    {
+      "contract_refs": [
+        "/execution/fee_bps_per_side"
+      ],
+      "cost_basis": "declared_input",
+      "label": "Fee assumption per side",
+      "metric_id": "fee_bps_per_side",
+      "sample": "confirmed research contract",
+      "section": "assumptions",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/fee_bps_per_side",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239",
+      "split": "all_declared_splits",
+      "unit": "basis_points",
+      "value": 4.0
+    },
+    {
+      "contract_refs": [
+        "/execution/slippage_bps_per_side"
+      ],
+      "cost_basis": "declared_input",
+      "label": "Slippage assumption per side",
+      "metric_id": "slippage_bps_per_side",
+      "sample": "confirmed research contract",
+      "section": "assumptions",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/slippage_bps_per_side",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239",
+      "split": "all_declared_splits",
+      "unit": "basis_points",
+      "value": 1.5
+    },
+    {
+      "contract_refs": [
+        "/execution/position_sizing/value"
+      ],
+      "cost_basis": "declared_input",
+      "label": "Fixed position notional",
+      "metric_id": "fixed_notional",
+      "sample": "confirmed research contract",
+      "section": "assumptions",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/execution/position_sizing/value",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239",
+      "split": "all_declared_splits",
+      "unit": "USDT",
+      "value": 1000.0
+    },
+    {
+      "contract_refs": [
+        "/validation/minimum_events"
+      ],
+      "cost_basis": "declared_input",
+      "label": "Minimum event requirement",
+      "metric_id": "minimum_events",
+      "sample": "confirmed research contract",
+      "section": "assumptions",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/validation/minimum_events",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239",
+      "split": "all_declared_splits",
+      "unit": "events",
+      "value": 200
+    },
+    {
+      "contract_refs": [
+        "/validation/bootstrap_samples"
+      ],
+      "cost_basis": "declared_input",
+      "label": "Bootstrap samples",
+      "metric_id": "bootstrap_samples",
+      "sample": "confirmed research contract",
+      "section": "assumptions",
+      "source_artifact": "docs/strategy_lab/examples/btcusdt_ema9_bounce.event-study.json",
+      "source_json_pointer": "/validation/bootstrap_samples",
+      "source_sha256": "1993fd8b728a84e415e443649df4c3c7122ade0daffdd14b20a76da7db4c6239",
+      "split": "all_declared_splits",
+      "unit": "samples",
+      "value": 10000
+    }
+  ],
+  "outcomes": {
+    "metric_ids": [
+      "forward_1_mean_net_return",
+      "forward_1_median_net_return",
+      "forward_1_mean_ci_low",
+      "forward_1_mean_ci_high",
+      "forward_1_one_sided_p_value",
+      "forward_1_effective_sample_size",
+      "forward_3_mean_net_return",
+      "forward_3_median_net_return",
+      "forward_3_mean_ci_low",
+      "forward_3_mean_ci_high",
+      "forward_3_one_sided_p_value",
+      "forward_3_effective_sample_size",
+      "forward_6_mean_net_return",
+      "forward_6_median_net_return",
+      "forward_6_mean_ci_low",
+      "forward_6_mean_ci_high",
+      "forward_6_one_sided_p_value",
+      "forward_6_effective_sample_size",
+      "forward_12_mean_net_return",
+      "forward_12_median_net_return",
+      "forward_12_mean_ci_low",
+      "forward_12_mean_ci_high",
+      "forward_12_one_sided_p_value",
+      "forward_12_effective_sample_size"
+    ],
+    "probability_label": "historical_empirical_rate"
+  },
+  "report_version": "0.1.0",
+  "sample": {
+    "holdout_policy": "locked outcomes absent",
+    "label": "training and validation development sample only",
+    "metric_ids": [
+      "accepted_events",
+      "development_events",
+      "hidden_holdout_events",
+      "resolved_barrier_events",
+      "target_events",
+      "historical_success_rate"
+    ]
+  },
+  "validation": {
+    "method": "anchored_walk_forward",
+    "metric_ids": [
+      "walk_forward_fold_count",
+      "corrected_hypothesis_count",
+      "corrected_positive_hypotheses",
+      "adversarial_checks_rejected",
+      "holdout_opened"
+    ],
+    "multiple_testing_correction": "benjamini_hochberg",
+    "walk_forward_metric_ids": [
+      "fold-1_training_event_count",
+      "fold-1_validation_event_count",
+      "fold-1_training_mean_net_return",
+      "fold-1_validation_mean_net_return",
+      "fold-1_purged_training_events",
+      "fold-1_embargoed_validation_events",
+      "fold-2_training_event_count",
+      "fold-2_validation_event_count",
+      "fold-2_training_mean_net_return",
+      "fold-2_validation_mean_net_return",
+      "fold-2_purged_training_events",
+      "fold-2_embargoed_validation_events"
+    ]
+  },
+  "warnings": [
+    "Success rate is a historical empirical rate, not a future probability.",
+    "Final-holdout outcomes remain hidden under the frozen contract.",
+    "Two-sided hits unresolved within the same 1m candle remain excluded from resolved rates.",
+    "No parameter comparison or strategy optimization was performed.",
+    "Final-holdout outcomes remain locked and were not opened.",
+    "Success rates are historical empirical rates, not future probabilities.",
+    "Corrected development evidence does not authorize deployment.",
+    "Phase 5 validates one frozen definition and performs no parameter search.",
+    "This export does not authorize deployment or live trading."
+  ]
+}

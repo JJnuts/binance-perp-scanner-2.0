@@ -1,0 +1,880 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.strategy-lab/schemas/research-contract-0.1.0.json",
+  "title": "Strategy Lab Research Contract",
+  "description": "Strict contract between reviewed research intent and deterministic execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "experiment",
+    "research",
+    "market",
+    "data",
+    "signal",
+    "entry",
+    "outcome",
+    "execution",
+    "validation",
+    "reporting"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "0.1.0"
+    },
+    "experiment": {
+      "$ref": "#/$defs/experiment"
+    },
+    "research": {
+      "$ref": "#/$defs/research"
+    },
+    "market": {
+      "$ref": "#/$defs/market"
+    },
+    "data": {
+      "$ref": "#/$defs/data"
+    },
+    "signal": {
+      "$ref": "#/$defs/signal"
+    },
+    "entry": {
+      "$ref": "#/$defs/entry"
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "validation": {
+      "$ref": "#/$defs/validation"
+    },
+    "reporting": {
+      "$ref": "#/$defs/reporting"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "research": {
+            "properties": {
+              "type": {
+                "const": "event_study"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "research": {
+            "properties": {
+              "engine": {
+                "const": "vectorbt"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "research": {
+            "properties": {
+              "type": {
+                "const": "strategy_backtest"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "research": {
+            "properties": {
+              "engine": {
+                "const": "freqtrade"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "barrier",
+                  "both"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "required": [
+              "barrier"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "name",
+        "hypothesis"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "minLength": 3,
+          "maxLength": 100
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "hypothesis": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "research": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "engine"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "event_study",
+            "strategy_backtest"
+          ]
+        },
+        "engine": {
+          "enum": [
+            "vectorbt",
+            "freqtrade"
+          ]
+        }
+      }
+    },
+    "market": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchange",
+        "venue",
+        "symbols",
+        "direction"
+      ],
+      "properties": {
+        "exchange": {
+          "const": "binance"
+        },
+        "venue": {
+          "const": "usd_m_futures"
+        },
+        "symbols": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]+USDT$"
+          }
+        },
+        "direction": {
+          "enum": [
+            "long",
+            "short",
+            "both"
+          ]
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "timeframe",
+        "start",
+        "end",
+        "timezone",
+        "bar_policy",
+        "warmup_bars",
+        "detail_timeframe",
+        "cache_policy"
+      ],
+      "properties": {
+        "source": {
+          "const": "binance_public_api"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/timeframe"
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "const": "UTC"
+        },
+        "bar_policy": {
+          "const": "closed_only"
+        },
+        "warmup_bars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "detail_timeframe": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timeframe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_policy": {
+          "const": "immutable_raw"
+        }
+      }
+    },
+    "timeframe": {
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "6h",
+        "8h",
+        "12h",
+        "1d"
+      ]
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "indicator",
+        "event",
+        "context_filters"
+      ],
+      "properties": {
+        "indicator": {
+          "$ref": "#/$defs/moving_average"
+        },
+        "event": {
+          "$ref": "#/$defs/moving_average_bounce"
+        },
+        "context_filters": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/context_filter"
+          }
+        }
+      }
+    },
+    "moving_average": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "length",
+        "price_source"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "ema",
+            "sma"
+          ]
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10000
+        },
+        "price_source": {
+          "enum": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "hl2",
+            "hlc3",
+            "ohlc4"
+          ]
+        }
+      }
+    },
+    "moving_average_bounce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "approach",
+        "precondition_bars",
+        "probe_field",
+        "touch_tolerance_bps",
+        "max_penetration_bps",
+        "confirmation",
+        "min_rejection_bps"
+      ],
+      "properties": {
+        "type": {
+          "const": "moving_average_bounce"
+        },
+        "approach": {
+          "enum": [
+            "from_above",
+            "from_below",
+            "either"
+          ]
+        },
+        "precondition_bars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "probe_field": {
+          "enum": [
+            "low",
+            "high",
+            "open",
+            "close"
+          ]
+        },
+        "touch_tolerance_bps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "max_penetration_bps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "confirmation": {
+          "enum": [
+            "close_above_average",
+            "close_below_average",
+            "close_on_approach_side"
+          ]
+        },
+        "min_rejection_bps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      }
+    },
+    "context_filter": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/moving_average_relation_filter"
+        },
+        {
+          "$ref": "#/$defs/rsi_range_filter"
+        },
+        {
+          "$ref": "#/$defs/relative_volume_filter"
+        },
+        {
+          "$ref": "#/$defs/vwap_relation_filter"
+        }
+      ]
+    },
+    "moving_average_relation_filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "average",
+        "relation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "moving_average_relation"
+        },
+        "average": {
+          "$ref": "#/$defs/moving_average"
+        },
+        "relation": {
+          "enum": [
+            "price_above",
+            "price_below",
+            "primary_above_filter_average",
+            "primary_below_filter_average"
+          ]
+        }
+      }
+    },
+    "rsi_range_filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "length",
+        "minimum",
+        "maximum"
+      ],
+      "properties": {
+        "kind": {
+          "const": "rsi_range"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000
+        },
+        "minimum": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maximum": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "relative_volume_filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "lookback",
+        "minimum_ratio"
+      ],
+      "properties": {
+        "kind": {
+          "const": "relative_volume_minimum"
+        },
+        "lookback": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10000
+        },
+        "minimum_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        }
+      }
+    },
+    "vwap_relation_filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "anchor",
+        "relation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "vwap_relation"
+        },
+        "anchor": {
+          "enum": [
+            "utc_day",
+            "utc_week"
+          ]
+        },
+        "relation": {
+          "enum": [
+            "above",
+            "below"
+          ]
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timing",
+        "price",
+        "cooldown_bars",
+        "overlapping_positions"
+      ],
+      "properties": {
+        "timing": {
+          "const": "next_bar_open"
+        },
+        "price": {
+          "const": "open"
+        },
+        "cooldown_bars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "overlapping_positions": {
+          "enum": [
+            "allow",
+            "skip"
+          ]
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "forward_horizons_bars"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "forward_return",
+            "barrier",
+            "both"
+          ]
+        },
+        "forward_horizons_bars": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "barrier": {
+          "$ref": "#/$defs/barrier"
+        }
+      }
+    },
+    "barrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_pct",
+        "stop_pct",
+        "max_holding_bars",
+        "same_bar_resolution",
+        "fallback_resolution"
+      ],
+      "properties": {
+        "target_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "stop_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "max_holding_bars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "same_bar_resolution": {
+          "enum": [
+            "lower_timeframe_replay",
+            "unresolved",
+            "stop_first",
+            "target_first"
+          ]
+        },
+        "fallback_resolution": {
+          "enum": [
+            "unresolved",
+            "stop_first",
+            "target_first"
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fee_bps_per_side",
+        "slippage_bps_per_side",
+        "funding",
+        "position_sizing"
+      ],
+      "properties": {
+        "fee_bps_per_side": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "slippage_bps_per_side": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "funding": {
+          "$ref": "#/$defs/funding"
+        },
+        "position_sizing": {
+          "$ref": "#/$defs/position_sizing"
+        }
+      }
+    },
+    "funding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "include",
+        "source"
+      ],
+      "properties": {
+        "include": {
+          "type": "boolean"
+        },
+        "source": {
+          "enum": [
+            "binance_historical_funding",
+            "not_applicable"
+          ]
+        }
+      }
+    },
+    "position_sizing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "value"
+      ],
+      "properties": {
+        "model": {
+          "enum": [
+            "fixed_notional",
+            "percent_equity"
+          ]
+        },
+        "value": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000000
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "splits",
+        "final_holdout_locked",
+        "minimum_events",
+        "confidence_level",
+        "bootstrap_samples",
+        "multiple_testing_correction",
+        "selection_scope",
+        "purge_bars",
+        "embargo_bars",
+        "random_seed"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "anchored_walk_forward",
+            "rolling_walk_forward",
+            "chronological_holdout",
+            "exploratory_only"
+          ]
+        },
+        "splits": {
+          "$ref": "#/$defs/splits"
+        },
+        "final_holdout_locked": {
+          "type": "boolean"
+        },
+        "minimum_events": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        },
+        "confidence_level": {
+          "type": "number",
+          "exclusiveMinimum": 0.5,
+          "exclusiveMaximum": 1
+        },
+        "bootstrap_samples": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000000
+        },
+        "multiple_testing_correction": {
+          "enum": [
+            "benjamini_hochberg",
+            "bonferroni",
+            "none"
+          ]
+        },
+        "selection_scope": {
+          "const": "training_and_validation_only"
+        },
+        "purge_bars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "embargo_bars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "random_seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "splits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "training",
+        "validation",
+        "final_holdout"
+      ],
+      "properties": {
+        "training": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "validation": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "final_holdout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metrics",
+        "confidence_intervals",
+        "include_event_or_trade_log",
+        "include_reproducibility_manifest",
+        "probability_label",
+        "export_formats"
+      ],
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "event_count",
+              "resolved_event_count",
+              "success_rate",
+              "mean_forward_return",
+              "median_forward_return",
+              "expectancy",
+              "profit_factor",
+              "max_drawdown",
+              "sharpe_ratio",
+              "sortino_ratio",
+              "calmar_ratio",
+              "win_rate",
+              "average_trade",
+              "exposure",
+              "regime_breakdown",
+              "subperiod_breakdown"
+            ]
+          }
+        },
+        "confidence_intervals": {
+          "const": true
+        },
+        "include_event_or_trade_log": {
+          "type": "boolean"
+        },
+        "include_reproducibility_manifest": {
+          "const": true
+        },
+        "probability_label": {
+          "const": "historical_empirical_rate"
+        },
+        "export_formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "json",
+              "csv",
+              "html",
+              "markdown",
+              "txt"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

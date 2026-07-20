@@ -1,0 +1,12 @@
+{
+  "bundle_id": "525d70fe2f9df2ce633f302c37dc1036d2ffd06b320bee0fcc0e6402be4fea2e",
+  "claim_level": "exploratory",
+  "confirmed_contract_sha256": "a05aa70a8037b1c3290505d944a6e2fc470d1dd7ac8a6075d07b1103ec7714f9",
+  "credentials_inherited": false,
+  "holdout_opened": false,
+  "job_id": "job-a05aa70a8037b1c32905-a1",
+  "network_used": false,
+  "promotion_authorized": false,
+  "status": "passed",
+  "validation_conclusion": "negative"
+}

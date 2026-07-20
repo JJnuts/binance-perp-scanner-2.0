@@ -1,0 +1,21 @@
+{
+  "candidate_signal_indices": [
+    15,
+    20,
+    35
+  ],
+  "accepted_signal_indices": [
+    15,
+    35
+  ],
+  "cooldown_skipped_count": 1,
+  "overlap_skipped_count": 0,
+  "barrier_statuses": [
+    "target",
+    "target"
+  ],
+  "ambiguous_event_count": 1,
+  "ambiguous_bar_open_time_ms": 1767236400000,
+  "ema_at_first_signal": 101.11407374883555,
+  "ema_at_second_accepted_signal": 103.10016225927687
+}

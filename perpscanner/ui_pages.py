@@ -154,16 +154,16 @@ def _render_btc_options_cockpit(anchor_mode: str):
     metric_help = {
         "BTC Spot": "Current BTC reference price used to anchor option strikes, moneyness, and distance calculations.",
         "OI 1H": "One-hour change in Binance BTCUSDT perpetual open interest; rising OI often means new leverage is entering.",
-        "Gamma Flip": "Estimated BTC price where dealer gamma exposure changes sign, often shifting hedging from stabilizing to amplifying moves.",
+        "Gamma Flip": "FULL-CHAIN cumulative-GEX zero-crossing (proxy: current signed GEX summed by strike, not a repriced-chain flip). One big monthly expiry can drown the intraday-relevant picture — cross-check the front-window crossings shown under Front 24H/7D GEX.",
         "Net GEX Approx": "Simple call-minus-put gamma exposure estimate across the visible Deribit option chain.",
-        "Front 24H GEX": "Absolute gamma exposure in options expiring within the next 24 hours.",
-        "Front 7D GEX": "Absolute gamma exposure in options expiring within the next seven days.",
+        "Front 24H GEX": "Absolute gamma exposure expiring within 24 hours. The '0x' value below is this window's own cumulative-GEX zero-crossing — usually the more intraday-relevant flip than the full-chain number.",
+        "Front 7D GEX": "Absolute gamma exposure expiring within seven days. The '0x' value below is this window's own cumulative-GEX zero-crossing — usually the more intraday-relevant flip than the full-chain number.",
         "Pin Score": "How strongly nearby option gamma may pull BTC toward a candidate strike into expiry.",
         "Funding 8H": "Latest eight-hour BTCUSDT perpetual funding rate; positive means longs pay shorts.",
         "ATM IV": "At-the-money implied volatility for the nearest liquid BTC options expiry.",
         "IV Term": "Front-expiry IV versus back-expiry IV; contango means back IV is higher, backwardation means front IV is higher.",
         "Front RR": "Front-expiry risk reversal, comparing call IV to put IV; positive favors calls, negative favors puts.",
-        "Pressure Est.": "Estimated next hedging pressure bias from the current gamma and charm/vanna context.",
+        "8H Δ-Drift Proxy": "Approximate next-8h chain delta drift from charm/vanna on unsigned OI with an assumed dealer-positioning convention. Dealer inventory direction is inferred, not observed — a weak-prior proxy, not a dealer-flow forecast.",
         "7D Block GEX Est.": "Seven-day block-trade-adjusted gamma estimate from matched Deribit block option legs.",
         "Block Legs": "Number of matched Deribit block option legs used in the seven-day block-flow estimate.",
         "RFQ Legs": "Matched block legs tagged as RFQ, weighted as higher-confidence institutional flow.",
@@ -175,8 +175,12 @@ def _render_btc_options_cockpit(anchor_mode: str):
     c2.metric("OI 1H", f"{float(bundle['oi_change_1h']):+.2%}", help=metric_help["OI 1H"])
     c3.metric("Gamma Flip", f"{gamma_flip:,.0f}" if gamma_flip else "n/a", help=metric_help["Gamma Flip"])
     c4.metric("Net GEX Approx", _format_gex_billions(float(bundle["total_signed_gex"]), signed=True), help=metric_help["Net GEX Approx"])
-    c5.metric("Front 24H GEX", _format_gex_billions(float(front_24h["abs_gex"])), help=metric_help["Front 24H GEX"])
-    c6.metric("Front 7D GEX", _format_gex_billions(float(front_7d["abs_gex"])), help=metric_help["Front 7D GEX"])
+    zc24 = front_24h.get("zero_crossing")
+    zc7d = front_7d.get("zero_crossing")
+    c5.metric("Front 24H GEX", _format_gex_billions(float(front_24h["abs_gex"])),
+              f"0x {zc24:,.0f}" if zc24 else "0x n/a", delta_color="off", help=metric_help["Front 24H GEX"])
+    c6.metric("Front 7D GEX", _format_gex_billions(float(front_7d["abs_gex"])),
+              f"0x {zc7d:,.0f}" if zc7d else "0x n/a", delta_color="off", help=metric_help["Front 7D GEX"])
 
     f1, f2, f3, f4, f5, f6 = st.columns(6)
     f1.metric("Pin Score", f"{_safe_float(pin.get('pin_score')):.0f}/100", help=metric_help["Pin Score"])
@@ -184,7 +188,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
     f3.metric("ATM IV", f"{float(atm_iv['effective_iv'].iloc[0]):.1f}" if not atm_iv.empty else "n/a", help=metric_help["ATM IV"])
     f4.metric("IV Term", str(iv_term.get("term_regime", "n/a")), f"{_safe_float(iv_term.get('iv_ratio')):.2f}x", help=metric_help["IV Term"])
     f5.metric("Front RR", f"{_safe_float(risk_reversal['risk_reversal'].iloc[0]):+.2f}" if not risk_reversal.empty else "n/a", help=metric_help["Front RR"])
-    f6.metric("Pressure Est.", str(pressure_forecast.get("pressure_bias", "Neutral")), help=metric_help["Pressure Est."])
+    f6.metric("8H Δ-Drift Proxy", str(pressure_forecast.get("pressure_bias", "Neutral")), help=metric_help["8H Δ-Drift Proxy"])
 
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("7D Block GEX Est.", _format_gex_billions(_safe_float(block_flow_7d.get("total_block_gex")), signed=True), help=metric_help["7D Block GEX Est."])
@@ -357,7 +361,7 @@ def _render_btc_options_cockpit(anchor_mode: str):
 
     _render_jarvis_widget(bundle, anchor_mode)
 def _render_term_guide():
-    st.subheader("Glossary / Term Guide")
+    st.subheader("Glossary / Term Guide", anchor="glossary-term-guide")
     st.caption("Quick explanations for the score names and raw fields used in the screener table.")
     sections = []
     for idx, (group_name, items) in enumerate(TERM_GUIDE_GROUPS):
@@ -372,7 +376,7 @@ def _render_term_guide():
         )
     st.markdown("".join(sections), unsafe_allow_html=True)
 def _render_research_dashboard():
-    st.subheader("Research / Signal Quality")
+    st.subheader("Research / Signal Quality", anchor="research-signal-quality")
     st.caption(
         "Every scan is logged locally so the scores can be judged against forward returns. "
         "Rank IC answers whether a high score actually ranked future winners; the event study "
@@ -380,7 +384,7 @@ def _render_research_dashboard():
     )
     counts = snapshot_counts()
     col_a, col_b = st.columns(2)
-    for col, (table, info) in zip((col_a, col_b), counts.items()):
+    for col, (table, info) in zip((col_a, col_b), counts.items(), strict=False):
         with col:
             st.metric(table.replace("_", " ").title(), f"{info['rows']:,} rows")
             st.caption(f"{info['cross_sections']:,} cross-sections | {info['first']} .. {info['last']}")
@@ -408,6 +412,7 @@ def _render_research_dashboard():
             },
         )
         st.caption(
+            "T-stats use a Newey-West adjustment for overlapping forward-return windows. "
             "Rule of thumb: |t| >= 2 with a consistent sign is evidence; anything else is noise. "
             "A negative IC on a score you rank by means the score is actively hurting."
         )
@@ -784,7 +789,10 @@ def _render_classic_altcoin_dashboard(
 
     heading_col, glossary_col = st.columns([0.76, 0.24], vertical_alignment="bottom")
     with heading_col:
-        st.subheader(f"Classic {score_label.lower()} dashboard ({len(setups)} assets)")
+        st.subheader(
+            f"Classic {score_label.lower()} dashboard ({len(setups)} assets)",
+            anchor=f"classic-{scoring_mode.lower().replace(' ', '-')}-dashboard",
+        )
     with glossary_col:
         _render_glossary_jump()
     _show_table(setups.head(top_n), scoring_mode)
@@ -799,7 +807,7 @@ def _render_ltf_scalping_dashboard(
     top_n: int,
     view: str,
 ):
-    st.subheader("LTF Ignition")
+    st.subheader("LTF Ignition", anchor="ltf-ignition")
     st.caption("Native 5m, 15m, and 1h ATR regime scan with fresh-trigger, taker/CVD, basis, and break-hold gates.")
     if ltf_df.empty:
         ignition_df = ltf_df
@@ -886,7 +894,7 @@ def _render_htf_momentum_dashboard(
     top_n: int,
     view: str,
 ):
-    st.subheader("HTF Expansion")
+    st.subheader("HTF Expansion", anchor="htf-expansion")
     st.caption("Swing context: 1h expansion plus daily candle structure, pivot reclaim/rejection, BTC regime, OI persistence, and volume persistence.")
     expansion_df = df[df["htf_expansion_score"] >= float(min_score)].sort_values(
         ["htf_expansion_score", "daily_structure_score", "daily_oi_persistence_days"],
@@ -920,7 +928,7 @@ def _render_best_setups_dashboard(
     min_score: int,
     top_n: int,
 ):
-    st.subheader("Best Setups")
+    st.subheader("Best Setups", anchor="best-setups")
     st.caption("Fresh LTF triggers only: 2-of-3 timeframe alignment, CVD/taker confirmation, basis confirmation, and HTF context.")
     best_df = _build_best_setups(ltf_df, df)
     if not best_df.empty:
@@ -1008,6 +1016,8 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
             "rs_4h",
             "rs_24h",
             "funding_quality_score",
+            "funding_z",
+            "mins_to_funding",
             "alpha_score",
             "alpha_4h",
             "alpha_24h",
@@ -1035,6 +1045,8 @@ def _show_table(df: pd.DataFrame, scoring_mode: str):
             "rs_4h": st.column_config.TextColumn("RS 4H", help=_term_help("RS 4H")),
             "rs_24h": st.column_config.TextColumn("RS 24H", help=_term_help("RS 24H")),
             "funding_quality_score": st.column_config.NumberColumn("Funding Score", format="%.1f", help=_term_help("Funding Score")),
+            "funding_z": st.column_config.NumberColumn("zFunding", format="%.2f", help="Cross-sectional funding z-score across the scanned universe this cycle (how unusual this symbol's funding is vs its peers right now)."),
+            "mins_to_funding": st.column_config.NumberColumn("T-Fund (m)", format="%.0f", help="Minutes until this symbol's next funding settlement. Extreme zFunding into a near settlement = scheduled forced-flow window (funding-clock doctrine)."),
             "alpha_score": st.column_config.NumberColumn("Alpha Score", format="%.1f", help=_term_help("Alpha Score")),
             "alpha_4h": st.column_config.TextColumn("Alpha 4H", help=_term_help("Alpha 4H")),
             "alpha_24h": st.column_config.TextColumn("Alpha 24H", help=_term_help("Alpha 24H")),
@@ -1101,7 +1113,18 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
     premium_latest = _safe_float(flow_summary.get("premium_latest"), np.nan)
     c7.metric("Coinbase Premium", "n/a" if not np.isfinite(premium_latest) else f"{premium_latest:+.1f} bp")
     etf_ratio = _safe_float(flow_summary.get("etf_proxy_ratio"), np.nan)
-    c8.metric("ETF Tape Proxy", "n/a" if not np.isfinite(etf_ratio) else f"{etf_ratio:+.1%}")
+    c8.metric(
+        "ETF Tape Proxy",
+        "n/a" if not np.isfinite(etf_ratio) else f"{etf_ratio:+.1%}",
+        help=(
+            "Demand proxy built from US spot-BTC ETF trading (IBIT, FBTC, ARKB, BITB) on the last "
+            "completed session. Each fund's daily dollar volume is signed by where its close landed "
+            "inside the day's high-low range (close near the high = buy pressure, near the low = sell "
+            "pressure), then summed across funds and divided by total dollar volume. +100% means every "
+            "dollar traded with closes pinned at session highs, -100% pinned at lows. It is NOT official "
+            "ETF creation/redemption net flow - that data is only published with a lag."
+        ),
+    )
 
     st.caption(
         f"Bubble size reflects {config['label']} total spot volume. When Binance taker flow is available, "
@@ -1135,8 +1158,8 @@ def _render_bitcoin_section(bitcoin_mode: str, bubble_timeframe: str, bubble_loo
     if isinstance(etf_df, pd.DataFrame) and not etf_df.empty:
         st.plotly_chart(_build_etf_tape_chart(etf_df), use_container_width=True)
         st.caption(
-            "ETF tape uses EODHD daily OHLCV for IBIT, FBTC, ARKB, and BITB. It is a signed-volume demand proxy, "
-            "not official ETF creation/redemption net flow."
+            "ETF tape uses EODHD daily OHLCV for IBIT, FBTC, ARKB, and BITB. Volume is signed by close location "
+            "in the day's range (CLV), a graded demand proxy - not official ETF creation/redemption net flow."
         )
     elif etf_error:
         st.info(etf_error)

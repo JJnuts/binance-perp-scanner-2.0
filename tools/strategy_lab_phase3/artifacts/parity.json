@@ -1,0 +1,48 @@
+{
+  "event_count": 8244,
+  "exact_event_columns": [
+    "signal_index",
+    "signal_time_ms",
+    "entry_index",
+    "entry_time_ms",
+    "split",
+    "holdout_hidden",
+    "barrier_status",
+    "barrier_resolution"
+  ],
+  "exact_summary_fields": [
+    "candidate_signal_count",
+    "accepted_event_count",
+    "development_event_count",
+    "final_holdout_event_count_hidden",
+    "overlap_skipped_count",
+    "cooldown_skipped_count",
+    "incomplete_outcome_skipped_count",
+    "ambiguous_event_count",
+    "barrier_counts",
+    "resolved_event_count",
+    "target_count"
+  ],
+  "maximum_absolute_numeric_difference": 0.0,
+  "numeric_columns_compared": [
+    "entry_price",
+    "ema",
+    "barrier_exit_price",
+    "barrier_gross_return",
+    "barrier_net_return",
+    "funding_return",
+    "forward_1_gross",
+    "forward_1_net",
+    "forward_1_funding_payments",
+    "forward_3_gross",
+    "forward_3_net",
+    "forward_3_funding_payments",
+    "forward_6_gross",
+    "forward_6_net",
+    "forward_6_funding_payments",
+    "forward_12_gross",
+    "forward_12_net",
+    "forward_12_funding_payments"
+  ],
+  "status": "passed"
+}

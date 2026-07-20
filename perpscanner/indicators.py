@@ -121,7 +121,13 @@ def _range_context(df: pd.DataFrame, lookback: int, atr_value: float) -> tuple[f
     range_high = float(prior["high"].max())
     range_low = float(prior["low"].min())
     range_width = max(range_high - range_low, 0.0)
-    denom = max(atr_value, 1e-12)
+    if atr_value <= 0 or not np.isfinite(atr_value):
+        # No usable ATR (flat or brand-new market): ATR-normalized
+        # distances are meaningless, so report no breakout / zero width
+        # instead of dividing by epsilon and exploding.
+        range_position = 0.5 if range_width <= 1e-12 else float(np.clip((price - range_low) / range_width, 0.0, 1.0))
+        return range_high, range_low, range_position, 0.0
+    denom = atr_value
 
     if price > range_high:
         breakout_distance = (price - range_high) / denom

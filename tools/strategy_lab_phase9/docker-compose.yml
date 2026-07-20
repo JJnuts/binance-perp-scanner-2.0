@@ -1,0 +1,29 @@
+name: strategy-lab-phase9
+
+services:
+  stress-proof:
+    image: strategy-lab-streamlit:1.59.2-phase8
+    cpus: 1.0
+    mem_limit: 1g
+    pids_limit: 128
+    read_only: true
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /tmp/phase9-home
+      PYTHONPATH: /repo
+      PYTHONDONTWRITEBYTECODE: "1"
+      STRATEGY_LAB_OFFLINE: "1"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    tmpfs:
+      - /tmp:size=512m
+    command:
+      - /repo/tools/strategy_lab_phase9/run_stress_suite.py
+      - --repo-root
+      - /repo
+      - --output
+      - /artifacts
+    volumes:
+      - ../..:/repo:ro
+      - ./artifacts:/artifacts

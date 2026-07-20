@@ -1,0 +1,6 @@
+artifacts/
+compiled/
+runtime/
+freqtrade/user_data/backtest_results/
+freqtrade/user_data/data/
+freqtrade/user_data/config.json

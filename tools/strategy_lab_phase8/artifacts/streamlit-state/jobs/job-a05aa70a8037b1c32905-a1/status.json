@@ -1,0 +1,23 @@
+{
+  "artifact_hashes": {
+    "export-manifest.json": "02f8d1f0a44eaa40ecd5eb1c38f44f9f9297a6a44bb99142354f6b0432331522",
+    "metrics.csv": "0bed7ca96b6e3d7e6edcd79797856e45b1b8c3419a05c18c1d1ccd84e9d66b84",
+    "report.html": "97b3536bc0b1411a520d525c00e4c3a00d01d02a6292b1c9a4b61751dc77d3dd",
+    "results.json": "5e686f3c85d25e8ab98631fe52b0d523b11ac9b89093e921314ccab84146386e",
+    "traceability.json": "df25eb51e65a60df2b7bd2820652cac357c2000562a8e01b2bcca8a1853b8713"
+  },
+  "attempt": 1,
+  "completed_at_utc": "2026-07-16T23:45:31.943992+00:00",
+  "confirmation_id": "confirmed-ac2658deac689b4ca318",
+  "confirmed_contract_sha256": "a05aa70a8037b1c3290505d944a6e2fc470d1dd7ac8a6075d07b1103ec7714f9",
+  "created_at_utc": "2026-07-16T23:45:30.431287+00:00",
+  "job_id": "job-a05aa70a8037b1c32905-a1",
+  "record_type": "ui_job",
+  "record_version": "0.1.0",
+  "result_file": "job-result.json",
+  "result_sha256": "ce29ea6d78c1efdea80afdba87502b0f3d5cc3b11d70b01a186465330354b791",
+  "started_at_utc": "2026-07-16T23:45:31.659408+00:00",
+  "state": "completed",
+  "updated_at_utc": "2026-07-16T23:45:31.944011+00:00",
+  "worker_pid": 46
+}

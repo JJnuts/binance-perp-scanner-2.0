@@ -123,6 +123,7 @@ def build_metrics(
         premium_entry = premium_map.get(symbol, {})
         premium_bp = float(premium_entry.get("premium_bp", 0.0))
         premium_roc_bp_h = float(premium_entry.get("premium_roc_bp_h", 0.0))
+        next_funding_ms = float(premium_entry.get("next_funding_ms", 0.0))
         funding_rate = float(context["funding_rate"])
         funding_cumulative_7d = float(context["funding_cumulative_7d"])
         funding_trend = float(context["funding_trend"])
@@ -179,10 +180,12 @@ def build_metrics(
         else:
             htf_atr_roc = 0.0
         htf_range_high, htf_range_low, htf_range_position, htf_range_width_atr = _range_context(df, 72, htf_atr_value)
-        if price > htf_range_high and htf_range_high > 0:
-            htf_breakout_distance_atr = (price - htf_range_high) / max(htf_atr_value, 1e-12)
+        if htf_atr_value <= 0:
+            htf_breakout_distance_atr = 0.0
+        elif price > htf_range_high and htf_range_high > 0:
+            htf_breakout_distance_atr = (price - htf_range_high) / htf_atr_value
         elif price < htf_range_low and htf_range_low > 0:
-            htf_breakout_distance_atr = (price - htf_range_low) / max(htf_atr_value, 1e-12)
+            htf_breakout_distance_atr = (price - htf_range_low) / htf_atr_value
         else:
             htf_breakout_distance_atr = 0.0
 
@@ -341,6 +344,7 @@ def build_metrics(
                 "oi_trend_raw": oi_trend,
                 "premium_bp": premium_bp,
                 "premium_roc_bp_h": premium_roc_bp_h,
+                "next_funding_ms": next_funding_ms,
                 "ret_1h": ret_1h,
                 "ret_4h": ret_4h,
                 "ret_24h": ret_24h,
@@ -406,6 +410,8 @@ def build_metrics(
 
     funding_std = float(out["funding_rate"].std())
     out["funding_z"] = (out["funding_rate"] - out["funding_rate"].mean()) / (funding_std + 1e-10)
+    now_ms = float(pd.Timestamp.utcnow().value // 10**6)
+    out["mins_to_funding"] = ((out["next_funding_ms"] - now_ms) / 60_000.0).clip(lower=0.0)
     funding_cumulative_std = float(out["funding_cumulative_7d"].std())
     out["funding_cumulative_z"] = (
         out["funding_cumulative_7d"] - out["funding_cumulative_7d"].mean()

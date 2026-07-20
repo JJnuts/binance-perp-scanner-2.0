@@ -240,7 +240,11 @@ class ScoringHelperTests(unittest.TestCase):
     def test_pressure_forecast_is_labeled_estimate(self):
         pressure = scanner._pressure_forecast(self._sample_options_df(), iv_change_points=-2.0)
 
-        self.assertIn("Estimated", pressure["pressure_copy"])
+        # 2026-07-19 rename: "Pressure Est." -> "8H Chain Delta-Drift Proxy".
+        # The invariant this test protects is unchanged and stricter: the copy
+        # must state that dealer direction is inferred, never observed.
+        self.assertIn("proxy", pressure["pressure_copy"])
+        self.assertIn("inferred, not observed", pressure["pressure_copy"])
         self.assertIn(pressure["pressure_bias"], {"Upside pressure", "Downside pressure", "Neutral"})
 
     def test_prepare_bubble_frame_adds_spot_flow_fields(self):
@@ -1066,6 +1070,145 @@ class WSFeedTests(unittest.TestCase):
         feed.seed("AAAUSDT", "5m", seed_df)
 
         self.assertIsNone(feed.frame("AAAUSDT", "5m"))
+
+
+class HtfRobustnessTests(unittest.TestCase):
+    @staticmethod
+    def _daily_frame(n=60, price=100.0, vol=1000.0):
+        idx = pd.date_range("2026-05-01", periods=n, freq="D")
+        close = pd.Series(price, index=idx) * (1 + pd.Series(range(n), index=idx) * 0.001)
+        return pd.DataFrame(
+            {
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "vol": vol,
+                "quote_vol": vol * price,
+                "trades": 100.0,
+                "tb_quote": vol * price / 2,
+            },
+            index=idx,
+        )
+
+    def test_daily_swing_context_survives_nan_latest_volume(self):
+        df = self._daily_frame()
+        df.iloc[-1, df.columns.get_loc("quote_vol")] = float("nan")
+
+        result = scanner._daily_swing_context(df, pd.DataFrame(), None)
+
+        for key in ("daily_long_score", "daily_short_score", "daily_structure_score"):
+            value = float(result[key])
+            self.assertEqual(value, value, f"{key} is NaN")  # NaN != NaN
+            self.assertGreaterEqual(value, 0.0)
+            self.assertLessEqual(value, 100.0)
+
+    def test_range_context_zero_atr_reports_zero_width(self):
+        df = self._daily_frame(120)
+
+        high, low, position, width_atr = scanner._range_context(df, 72, 0.0)
+
+        self.assertEqual(width_atr, 0.0)
+        self.assertGreaterEqual(position, 0.0)
+        self.assertLessEqual(position, 1.0)
+
+    def test_spot_flow_summary_tolerates_non_dict_etf_summary(self):
+        df = scanner._prepare_bubble_frame(
+            pd.DataFrame(
+                {
+                    "ts": pd.date_range("2026-07-01", periods=40, freq="h"),
+                    "close": 60000.0,
+                    "quote_volume": 1e6,
+                    "source": "test",
+                }
+            ),
+            30,
+        )
+
+        result = scanner._spot_flow_summary(df, pd.DataFrame(), {"summary": "error text"})
+
+        self.assertIn("state", result)
+
+
+class EtfTapeClvTests(unittest.TestCase):
+    """The ETF tape proxy must grade by close location in the day's range,
+    not by sign(return): all four BTC ETFs share BTC's daily direction, so
+    a sign-based ratio is pinned at +/-100% every single session."""
+
+    @staticmethod
+    def _rows(closes, span=0.02, pin=None):
+        rows = []
+        for i, close in enumerate(closes):
+            high = close * (1 + span)
+            low = close * (1 - span)
+            if pin == "high":
+                close = high
+            elif pin == "low":
+                close = low
+            rows.append(
+                {
+                    "date": f"2026-06-{i + 1:02d}",
+                    "open": close,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "adjusted_close": close,
+                    "volume": 1_000_000.0,
+                }
+            )
+        return rows
+
+    def _tape(self, payload_by_ticker):
+        import os as _os
+
+        from perpscanner import data_equities
+
+        original_get = data_equities._get_json_url
+        original_token = _os.environ.get("EODHD_API_TOKEN")
+        _os.environ["EODHD_API_TOKEN"] = "test-token"
+
+        def fake(url, params=None, timeout=None, **kwargs):
+            ticker = url.rsplit("/", 1)[-1].split(".")[0]
+            return payload_by_ticker.get(ticker, [])
+
+        data_equities._get_json_url = fake
+        try:
+            return data_equities._fetch_btc_etf_tape(30)
+        finally:
+            data_equities._get_json_url = original_get
+            if original_token is None:
+                _os.environ.pop("EODHD_API_TOKEN", None)
+            else:
+                _os.environ["EODHD_API_TOKEN"] = original_token
+
+    def test_all_red_day_is_graded_not_pinned(self):
+        closes = [60.0 * (0.99**i) for i in range(20)]
+        payload = {ticker: self._rows(closes) for ticker in ("IBIT", "FBTC", "ARKB", "BITB")}
+
+        ratio = self._tape(payload)["summary"]["latest_proxy_ratio"]
+
+        self.assertLess(abs(ratio), 0.999)
+
+    def test_close_at_low_is_strongly_negative(self):
+        ratio = self._tape({"IBIT": self._rows([60.0] * 20, pin="low")})["summary"]["latest_proxy_ratio"]
+
+        self.assertLess(ratio, -0.9)
+
+    def test_close_at_high_is_strongly_positive(self):
+        ratio = self._tape({"IBIT": self._rows([60.0] * 20, pin="high")})["summary"]["latest_proxy_ratio"]
+
+        self.assertGreater(ratio, 0.9)
+
+    def test_missing_high_low_falls_back_to_return_sign(self):
+        closes = [60.0 * (0.99**i) for i in range(20)]
+        rows = [
+            {key: row[key] for key in ("date", "close", "adjusted_close", "volume")}
+            for row in self._rows(closes)
+        ]
+
+        ratio = self._tape({"IBIT": rows})["summary"]["latest_proxy_ratio"]
+
+        self.assertEqual(ratio, -1.0)
 
 
 if __name__ == "__main__":

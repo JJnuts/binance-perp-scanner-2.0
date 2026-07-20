@@ -1,0 +1,91 @@
+name: strategy-lab-phase1
+
+x-proof-common: &proof-common
+  cpus: 2.0
+  mem_limit: 2g
+  pids_limit: 256
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=256m
+
+services:
+  vectorbt-proof:
+    <<: *proof-common
+    build:
+      context: .
+      dockerfile: vectorbt/Dockerfile
+    image: strategy-lab-vectorbt:0.28.5-phase1
+    network_mode: none
+    environment:
+      PHASE1_RUN_ID: ${PHASE1_RUN_ID:-manual}
+      NUMBA_CACHE_DIR: /tmp/numba-cache
+    volumes:
+      - ./fixture:/workspace/fixture:ro
+      - ./artifacts:/workspace/artifacts
+
+  freqtrade-prepare:
+    <<: *proof-common
+    image: freqtradeorg/freqtrade:2026.6
+    entrypoint:
+      - python
+    command:
+      - /phase1/freqtrade/prepare_fixture.py
+    network_mode: none
+    volumes:
+      - ./:/phase1:ro
+      - ./freqtrade/user_data:/freqtrade/user_data
+
+  freqtrade-backtest:
+    <<: *proof-common
+    image: freqtradeorg/freqtrade:2026.6
+    entrypoint:
+      - freqtrade
+    command:
+      - backtesting
+      - --config
+      - /freqtrade/user_data/config.json
+      - --strategy
+      - Phase1FixtureStrategy
+      - --strategy-path
+      - /freqtrade/user_data/strategies
+      - --timerange
+      - 20260101-20260102
+      - --fee
+      - "0.001"
+      - --export
+      - trades
+      - --export-directory
+      - /freqtrade/user_data/backtest_results
+      - --cache
+      - none
+    volumes:
+      - ./freqtrade/user_data:/freqtrade/user_data
+
+  freqtrade-verify:
+    <<: *proof-common
+    image: freqtradeorg/freqtrade:2026.6
+    entrypoint:
+      - python
+    command:
+      - /phase1/freqtrade/verify_result.py
+    network_mode: none
+    environment:
+      PHASE1_RUN_ID: ${PHASE1_RUN_ID:-manual}
+    volumes:
+      - ./:/phase1:ro
+      - ./artifacts:/phase1/artifacts
+      - ./freqtrade/user_data/backtest_results:/freqtrade/user_data/backtest_results:ro
+
+  compare-results:
+    <<: *proof-common
+    image: strategy-lab-vectorbt:0.28.5-phase1
+    entrypoint:
+      - python
+    command:
+      - /workspace/compare_results.py
+    network_mode: none
+    volumes:
+      - ./compare_results.py:/workspace/compare_results.py:ro
+      - ./artifacts:/workspace/artifacts

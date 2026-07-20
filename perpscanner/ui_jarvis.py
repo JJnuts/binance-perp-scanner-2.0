@@ -25,14 +25,22 @@ def _jarvis_vwap_read(latest: pd.Series) -> str:
     if close >= avwap:
         return "price is holding above anchored VWAP, which keeps intraday structure constructive"
     return "price is below anchored VWAP, which keeps intraday structure softer unless VWAP is reclaimed"
-def _jarvis_funding_read(funding_rate: float, oi_change_1h: float) -> str:
+def _jarvis_funding_read(funding_rate: float, oi_change_1h: float, funding_z: float = 0.0) -> str:
+    # Hybrid label: regime z-score (unusual vs its own trailing 30d) AND
+    # absolute level (economically large regardless of recent variance);
+    # the displayed state is the WORSE of the two, so a dead-flat regime
+    # can't make 0.005% look extreme and a hot regime can't hide a fat rate.
     abs_rate = abs(funding_rate)
-    if abs_rate < 0.0001:
+    abs_level = 0 if abs_rate < 0.0001 else 1 if abs_rate < 0.0004 else 2
+    z_level = 0 if abs(funding_z) < 1.0 else 1 if abs(funding_z) < 2.0 else 2
+    level = max(abs_level, z_level)
+    z_note = f" (z {funding_z:+.1f} vs its 30d regime)" if abs(funding_z) >= 1.0 else ""
+    if level == 0:
         funding_text = "funding is calm"
-    elif abs_rate < 0.0004:
-        funding_text = "funding is elevated but not extreme"
+    elif level == 1:
+        funding_text = f"funding is elevated but not extreme{z_note}"
     else:
-        funding_text = "funding is stretched and crowding risk is higher"
+        funding_text = f"funding is stretched and crowding risk is higher{z_note}"
 
     if oi_change_1h > 0.01:
         oi_text = "OI is expanding, which means new exposure is joining the move"
@@ -405,7 +413,7 @@ def _build_jarvis_summary(bundle: dict[str, object], anchor_mode: str) -> str:
 
     support_text = _jarvis_level_line(support_levels, "put_gex", "Support", "put GEX")
     resistance_text = _jarvis_level_line(resistance_levels, "call_gex", "Resistance", "call GEX")
-    funding_text = _jarvis_funding_read(funding_rate, oi_change_1h)
+    funding_text = _jarvis_funding_read(funding_rate, oi_change_1h, _safe_float(perp.get("funding_z")))
     iv_text = _jarvis_iv_read(atm_iv)
     sweep_text = _jarvis_sweep_read(sweeps)
     ibit_state = str(ibit.get("flow_state", "Unavailable"))

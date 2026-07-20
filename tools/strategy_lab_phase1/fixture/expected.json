@@ -1,0 +1,20 @@
+{
+  "fixture_version": "1.0.0",
+  "fixture_sha256": "6fdfd3f4d3f8034fc7be4c7dd2712220920dc58ff96c1597a5f5a91db726d5f3",
+  "rows": 40,
+  "ema_length": 3,
+  "ema_adjust": false,
+  "ema_min_periods": 3,
+  "precondition_bars": 3,
+  "event_timestamp": "2026-01-01T01:15:00+00:00",
+  "event_ema": 114.00003051757812,
+  "entry_timestamp": "2026-01-01T01:20:00+00:00",
+  "entry_price": 115.8,
+  "exit_timestamp": "2026-01-01T01:30:00+00:00",
+  "exit_price": 117.8,
+  "fee_rate_per_side": 0.001,
+  "canonical_gross_return": 0.017271157167530138,
+  "canonical_net_return": 0.015238647362999735,
+  "vectorbt_native_trade_return": 0.01525388601036266,
+  "freqtrade_native_trade_return": 0.01523865
+}

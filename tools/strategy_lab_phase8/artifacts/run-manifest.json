@@ -1,0 +1,14 @@
+{
+  "deterministic_source_id": "517f8baf61aa6d57054cbdd8eea61034e457f284e1b92311b4a4bfbdebd7ca65",
+  "phase": 8,
+  "proof_report_sha256": "37c30530fee9d609ac1cd0f442294bf31570dc3d357a66454f0317ef977e68ea",
+  "source_hashes": {
+    "perpscanner/app.py": "707c65d12cf89d4e6ad41000461242c4fd2e13127a0ba7be6553efae0a37e708",
+    "perpscanner/strategy_lab/ui_jobs.py": "98f01c82ed6c195c30002ee337f01e30292ff67f24973a1ab68958bd089c330b",
+    "perpscanner/strategy_lab/ui_model.py": "a49ac6e0d9f2230a723e0796c4ab69cefefe981d9c6beab5a10035ab99fc9714",
+    "perpscanner/ui_strategy_lab.py": "ebff772f2020abb9836ab233ea47086bff07fc7d2c6fdcbbf8f7b4fb32191390",
+    "tools/strategy_lab_phase8/run_ui_job.py": "fc726f13389d74f680624d3f6a420ea0d7a7ee7e98ef4b2329d890efba3fa3bc",
+    "tools/strategy_lab_phase8/run_ui_suite.py": "663a9b8d89855f521af46804190a909316a072b0e0de15a4af186cf2224b87d7"
+  },
+  "status": "passed"
+}
