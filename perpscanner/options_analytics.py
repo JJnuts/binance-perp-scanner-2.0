@@ -33,6 +33,7 @@ from .data_deribit import (
     _safe_fetch_deribit_option_ticker,
     _update_deribit_block_trade_store,
 )
+from .options_frames import _merge_deribit_option_tickers
 
 
 def _avwap_fetch_plan(anchor_mode: str) -> tuple[str, int]:
@@ -566,6 +567,8 @@ def _block_flow_disagreement_rows(strike_map: pd.DataFrame, spot: float, limit: 
     nearby["distance_pct"] = ((nearby["strike"] / spot) - 1.0) * 100.0
     nearby["importance"] = nearby["block_abs_gex"].abs() * (1.0 + nearby["rfq_trades"].clip(lower=0.0))
     return nearby.sort_values("importance", ascending=False).head(limit)
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     instruments_raw = _get_deribit("public/get_instruments", params={"currency": "BTC", "kind": "option", "expired": "false"}, timeout=20)
@@ -624,7 +627,7 @@ def build_btc_options_cockpit(anchor_mode: str) -> dict[str, object]:
     if ticker_df.empty:
         return {"error": "No Deribit option tickers with greeks could be fetched."}
 
-    options_df = merged.merge(ticker_df, on="instrument_name", how="inner")
+    options_df = _merge_deribit_option_tickers(merged, ticker_df)
     if options_df.empty:
         return {"error": "Options universe could not be merged with Deribit greeks."}
 
