@@ -1,0 +1,354 @@
+{
+  "manifest_version": 1,
+  "baseline_id": "binance-perp-scanner-pre-calibration-20260903T121630Z",
+  "baseline_state": "pre_calibration",
+  "created_at_utc": "2026-09-03T12:16:30.907848Z",
+  "purpose": "Freeze the exact research and signal configuration before any data-driven recalibration.",
+  "calibration_changes_applied": false,
+  "secrets_included": false,
+  "source_control": {
+    "repository": "binance-perp-scanner",
+    "branch": "master",
+    "commit": "3fa774ff347fa5541dcd176804340cef204b6aaa",
+    "commit_subject": "fix: preserve live Deribit option ticker fields",
+    "tracked_worktree_clean_before_manifest": true,
+    "untracked_scan_complete": false,
+    "untracked_scan_note": "Git could not inspect .pytest_cache because Windows denied access."
+  },
+  "frozen_research_store": {
+    "backup_file": "research_snapshots.sqlite",
+    "backup_directory": "C:\\Users\\mkpc\\Documents\\Codex\\2026-09-03\\lon\\outputs\\binance-perp-scanner-backups\\20260903T120213Z",
+    "backup_manifest_file": "backup-manifest.json",
+    "backup_manifest_sha256": "fedb6811e5eefe233125c0db20dc907c08558fa3a0dbb406c7a6c5939a889023",
+    "backup_size_bytes": 286846976,
+    "backup_sha256": "e6c1c9bfff325958473abe58c04e1d4a7efbc14f91e67313360b9707633c3126",
+    "sqlite_quick_check": "ok",
+    "source_and_backup_exact_match": true,
+    "candidate_holdout_cutoff_utc": "2026-09-03T12:01:29.372069Z",
+    "candidate_cutoff_status": "recorded_not_yet_enforced",
+    "tables": {
+      "metric_snapshots": {
+        "rows": 625085,
+        "distinct_scans": 6624,
+        "distinct_symbols": 254,
+        "min_scan_ts_utc": "2026-07-12T21:51:20.759826Z",
+        "max_scan_ts_utc": "2026-09-03T12:01:29.372069Z"
+      },
+      "ltf_snapshots": {
+        "rows": 598636,
+        "distinct_scans": 6389,
+        "distinct_symbols": 255,
+        "min_scan_ts_utc": "2026-07-12T21:51:20.759826Z",
+        "max_scan_ts_utc": "2026-09-03T12:01:29.372069Z"
+      }
+    }
+  },
+  "runtime_and_sampling": {
+    "primary_interval": "1h",
+    "primary_candle_limit": 240,
+    "ltf_intervals": [
+      "5m",
+      "15m",
+      "1h"
+    ],
+    "ltf_kline_limits": {
+      "5m": 240,
+      "15m": 240,
+      "1h": 240
+    },
+    "ltf_oi_limit": 120,
+    "htf_daily_limit": 120,
+    "htf_daily_oi_limit": 60,
+    "research_log_min_interval_seconds": 240,
+    "ui_default_liquidity_gates": {
+      "min_24h_quote_volume_usdt": 10000000.0,
+      "min_24h_trades": 15000.0,
+      "min_open_interest_value": 5000000.0
+    },
+    "ui_default_dashboard_filters": {
+      "min_dashboard_score": 70,
+      "max_overextension_score": 65,
+      "rows_to_show": 30
+    }
+  },
+  "ranking_configuration": {
+    "ltf_alpha_weights": {
+      "1h": 0.2,
+      "4h": 0.45,
+      "24h": 0.35
+    },
+    "htf_alpha_weights": {
+      "24h": 0.5,
+      "72h": 0.3,
+      "168h": 0.2
+    },
+    "vol_adjusted_weights": {
+      "24h": 0.35,
+      "72h": 0.35,
+      "168h": 0.3
+    },
+    "ltf_relative_strength_weights": {
+      "1h": 0.2,
+      "4h": 0.45,
+      "24h": 0.35
+    },
+    "htf_relative_strength_weights": {
+      "24h": 0.5,
+      "72h": 0.3,
+      "168h": 0.2
+    },
+    "volume_blend_weights": {
+      "ratio": 0.6,
+      "zscore": 0.4
+    },
+    "trend_blend_weights": {
+      "ema20": 0.3,
+      "ema36": 0.2,
+      "ema50": 0.15,
+      "alignment": 0.2,
+      "vwap": 0.15
+    },
+    "htf_trend_blend_weights": {
+      "ema36": 0.3,
+      "ema50": 0.25,
+      "alignment": 0.25,
+      "vwap": 0.2
+    },
+    "overextension_weights": {
+      "vwap": 0.45,
+      "ema20": 0.25,
+      "ema36": 0.15,
+      "ret_1h": 0.15
+    },
+    "momentum_score_weights": {
+      "alpha": 0.25,
+      "rs": 0.15,
+      "volume": 0.25,
+      "trend": 0.2,
+      "oi": 0.1,
+      "funding": 0.05
+    },
+    "htf_momentum_score_weights": {
+      "alpha": 0.3,
+      "vol_adjusted": 0.2,
+      "rs": 0.2,
+      "trend": 0.15,
+      "oi": 0.1,
+      "funding": 0.05
+    },
+    "setup_overextension_penalty": 0.45,
+    "htf_setup_overextension_penalty": 0.4,
+    "best_setup_weights": {
+      "ltf_ignition_score": 0.55,
+      "htf_expansion_score": 0.3,
+      "alignment_score": 0.15
+    },
+    "score_construction": {
+      "component_scores": "Cross-sectional percentile ranks on the active candidate universe unless a named scoring helper applies.",
+      "momentum_score": "weighted sum of alpha_score, relative_strength_score, volume_score, trend_score, oi_score, and funding_quality_score",
+      "htf_momentum_score": "weighted sum of htf_alpha_score, vol_adjusted_score, htf_relative_strength_score, htf_trend_score, oi_score, and funding_trend_quality_score",
+      "setup_score": "max(momentum_score - 0.45 * overextension_score, 0)",
+      "htf_setup_score": "max(htf_momentum_score - 0.40 * overextension_score, 0)",
+      "best_setup_score": "clip(0.55 * ltf_ignition_score + 0.30 * htf_expansion_score + 0.15 * alignment_score, 0, 100)"
+    },
+    "candidate_factors_not_in_any_blend": [
+      "premium_score",
+      "premium_roc_score",
+      "oi_trend_score"
+    ]
+  },
+  "lookbacks_and_scaling": {
+    "atr_period": 14,
+    "atr_percentile_lookback": 120,
+    "atr_roc_lookback": 3,
+    "compression_recent_bars": {
+      "5m": 18,
+      "15m": 12,
+      "1h": 8
+    },
+    "range_lookback_bars": {
+      "5m": 36,
+      "15m": 24,
+      "1h": 24
+    },
+    "relative_strength_lookback_bars": {
+      "5m": 12,
+      "15m": 8,
+      "1h": 4
+    },
+    "ema_periods": {
+      "fast": 20,
+      "mid": 36,
+      "slow": 50
+    },
+    "vwap_windows": {
+      "fast": 8,
+      "slow": 24,
+      "htf": 120
+    },
+    "volume_lookback": 30,
+    "oi_lookback": 3,
+    "oi_trend_lookback": 8,
+    "oi_period": "1h",
+    "funding_limit": 30,
+    "beta_estimation_lookbacks_bars": {
+      "1h_alpha": 72,
+      "4h_alpha": 72,
+      "24h_alpha": 96,
+      "72h_alpha": 168,
+      "168h_alpha": 216
+    }
+  },
+  "ignition_trigger_configuration": {
+    "base_thresholds": {
+      "atr_roc": 0.08,
+      "volume_z": 2.0,
+      "oi_z": 2.0,
+      "taker_imbalance_absolute": 0.08,
+      "basis_confirm_bp": 0.0,
+      "confluence": 0.6
+    },
+    "regime_threshold_multipliers": {
+      "Bull trend": 1.2,
+      "Drawdown": 1.15,
+      "Range": 0.85,
+      "Unknown": 1.0
+    },
+    "confluence_weights": {
+      "expansion": 0.3,
+      "volume": 0.25,
+      "oi": 0.2,
+      "taker": 0.15,
+      "basis": 0.1
+    },
+    "hard_vetoes": {
+      "long": "close above rolling VWAP AND current and prior closes each hold above their prior range highs",
+      "short": "close below rolling VWAP AND current and prior closes each hold below their prior range lows"
+    },
+    "confirmation_rules": {
+      "compression": "ATR percentile < 20, volume z-score < 0.5, and absolute OI z-score < 0.5 within the interval-specific recent window",
+      "expansion": "ATR rate of change exceeds the regime-scaled ATR threshold and at least one compression bar is present in the recent window",
+      "volume": "volume z-score exceeds the regime-scaled volume threshold",
+      "oi": "OI z-score exceeds the regime-scaled OI threshold",
+      "taker_long": "taker imbalance > 0.08 and 3-bar CVD slope > 0",
+      "taker_short": "taker imbalance < -0.08 and 3-bar CVD slope < 0",
+      "basis_long": "perpetual basis > 0 bp and 3-bar basis change > 0",
+      "basis_short": "perpetual basis < 0 bp and 3-bar basis change < 0",
+      "basis_when_spot_unavailable": "both binary sides pass, while the signed research component nets to zero"
+    },
+    "fresh_trigger_bars": {
+      "5m": 2,
+      "15m": 2,
+      "1h": 1
+    },
+    "best_setup_filters": {
+      "minimum_timeframe_alignment": 2,
+      "maximum_bars_since_trigger": 3,
+      "direction_required": [
+        "Long",
+        "Short"
+      ]
+    },
+    "ltf_ignition_display_score_weights": {
+      "compression_recent": 0.2,
+      "atr_expansion": 0.2,
+      "volume_spike": 0.2,
+      "oi_spike": 0.15,
+      "range_break": 0.15,
+      "relative_strength": 0.1
+    },
+    "triggered_score_floor": 75.0,
+    "watch_score_threshold": 45.0,
+    "compression_display_atr_percentile_threshold": 25.0
+  },
+  "research_protocol": {
+    "metric_table": "metric_snapshots",
+    "ltf_table": "ltf_snapshots",
+    "forward_horizons_hours": [
+      1.0,
+      4.0,
+      24.0
+    ],
+    "forward_return_label": {
+      "definition": "future_price / entry_price - 1",
+      "exit_selection": "first same-symbol snapshot at or after entry timestamp plus horizon",
+      "forward_join_tolerance_fraction_of_horizon": 0.35,
+      "external_price_calls": false,
+      "lookahead": false
+    },
+    "rank_ic": {
+      "method": "Spearman cross-sectional correlation for each scan, then mean/std/Newey-West t-stat across scans",
+      "minimum_symbols_per_cross_section": 10,
+      "minimum_distinct_factor_values": 3,
+      "overlap_adjustment": "Newey-West lag derived from horizon and median scan spacing"
+    },
+    "trigger_event_study": {
+      "eligible_rows": "trigger_fresh is true and trigger_direction is Long or Short",
+      "direction_adjustment": "short forward returns are sign-flipped",
+      "excess_return": "direction-adjusted return minus direction-adjusted same-timestamp cross-sectional mean",
+      "reported_statistics": [
+        "trigger_count",
+        "mean_signed_return",
+        "median_signed_return",
+        "hit_rate",
+        "mean_excess_return",
+        "excess_hit_rate"
+      ]
+    },
+    "confluence_weight_calibration": {
+      "component_column_map": {
+        "expansion": "comp_expansion",
+        "volume": "comp_volume",
+        "oi": "comp_oi",
+        "taker": "comp_taker_net",
+        "basis": "comp_basis_net"
+      },
+      "eligible_rows": "veto_side is Long or Short",
+      "minimum_rows_per_cross_section": 6,
+      "minimum_cross_sections_per_component_at_every_horizon": 30,
+      "method": "average each component mean directional IC across horizons, floor negative pooled ICs at zero, and renormalize positive values to sum to one",
+      "application_mode": "advisory_only",
+      "automatic_configuration_changes": false
+    },
+    "factor_columns": [
+      "alpha_score",
+      "htf_alpha_score",
+      "vol_adjusted_score",
+      "relative_strength_score",
+      "htf_relative_strength_score",
+      "volume_score",
+      "trend_score",
+      "htf_trend_score",
+      "oi_score",
+      "funding_quality_score",
+      "funding_trend_quality_score",
+      "momentum_score",
+      "htf_momentum_score",
+      "setup_score",
+      "htf_setup_score",
+      "overextension_score",
+      "htf_expansion_score",
+      "premium_bp",
+      "premium_roc_bp_h",
+      "oi_trend_raw",
+      "premium_score",
+      "premium_roc_score",
+      "oi_trend_score"
+    ]
+  },
+  "source_integrity_sha256": {
+    "perpscanner/config.py": "e34bafe2dfe80c9d1dca5cfc4e3df3bff0427ffc8a10c387c23962cef8872c6c",
+    "perpscanner/scoring.py": "f6b0af690d016bfd62ac9182f91cd71905d7e2481a42efdcf9a4b791781c8c85",
+    "perpscanner/research.py": "9a6d68e2cdc02cd5661dc2edde2db0f0fcbbc0589c969d05e2806b17bc7d20a7",
+    "perpscanner/features_ltf.py": "5ba661a16426a8afa8ffb93e6f57b5d2686151cc52ad22e3984add845dff6e17",
+    "perpscanner/features_htf.py": "f1a25d5697ad083215f826cc0b33c15e157debe10e5df5aa0fed1d47f33031a1",
+    "perpscanner/indicators.py": "f47fbc2aca759ce949eb775af3b2460ab5ff3bf0a6307d7b87f2c2c5faa2a3cf",
+    "perpscanner/regime.py": "4c764d0c78696639d467c58d1a78fb87d8ba7183082355dbe5f2436362fc7ef7",
+    "perpscanner/app.py": "64f6547e7bdaee87c311d357f0898d89ff62c72247a41356d7cd63e67c6ce203"
+  },
+  "scope_notes": [
+    "This manifest records the research and signal baseline only; it does not change formulas, weights, thresholds, database rows, or runtime behavior.",
+    "The candidate cutoff is provenance only in this task. Holdout enforcement is a separate subsequent task.",
+    "Runtime UI values can be changed by an operator; the manifest records the code defaults, not session-state overrides."
+  ]
+}
