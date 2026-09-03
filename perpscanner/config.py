@@ -1,5 +1,6 @@
 """Constants, thresholds, weights, palette, and term guide."""
 
+import os
 from pathlib import Path
 
 
@@ -108,6 +109,21 @@ BTC_OPTIONS_BLOCK_DB_PATH = REPO_ROOT / "data" / "deribit_block_trades.sqlite"
 # scores can be validated against forward returns (rank IC, trigger
 # event studies) instead of staying vibe-calibrated.
 RESEARCH_DB_PATH = REPO_ROOT / "data" / "research_snapshots.sqlite"
+# Calibration is deliberately isolated from the live append-only store.
+# The default is a verified, frozen copy under data/calibration; deployments
+# can point at the same verified bytes with PERPSCANNER_CALIBRATION_DB_PATH.
+RESEARCH_CALIBRATION_DB_ENV = "PERPSCANNER_CALIBRATION_DB_PATH"
+_RESEARCH_CALIBRATION_DEFAULT_PATH = (
+    REPO_ROOT / "data" / "calibration" / "research_snapshots_through_20260903T120129Z.sqlite"
+)
+RESEARCH_CALIBRATION_DB_PATH = Path(
+    os.environ.get(RESEARCH_CALIBRATION_DB_ENV, str(_RESEARCH_CALIBRATION_DEFAULT_PATH))
+    or str(_RESEARCH_CALIBRATION_DEFAULT_PATH)
+)
+RESEARCH_CALIBRATION_DB_SHA256 = "e6c1c9bfff325958473abe58c04e1d4a7efbc14f91e67313360b9707633c3126"
+RESEARCH_CALIBRATION_ENFORCE_SHA256 = True
+RESEARCH_HOLDOUT_CUTOFF_UTC = "2026-09-03T12:01:29.372069"
+RESEARCH_HOLDOUT_POLICY_ID = "binance-perp-scanner-holdout-20260903T120129Z"
 RESEARCH_LOG_MIN_INTERVAL_S = 240
 RESEARCH_HORIZONS_HOURS = (1.0, 4.0, 24.0)
 RESEARCH_MIN_GROUP_SIZE = 10

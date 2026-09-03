@@ -6,11 +6,12 @@ import streamlit as st
 from html import escape
 from datetime import datetime
 
-from .config import BTC_BUBBLE_TIMEFRAMES, CONFLUENCE_WEIGHTS, RESEARCH_DB_PATH, TERM_GUIDE_GROUPS
+from .config import BTC_BUBBLE_TIMEFRAMES, CONFLUENCE_WEIGHTS, TERM_GUIDE_GROUPS
 from .utils import _format_gex_billions, _format_human_count, _safe_float
 from .data_spot import _spot_flow_summary, build_bitcoin_bubble_data
 from .options_analytics import build_btc_options_cockpit
 from .research import (
+    calibration_store_info,
     confluence_component_ic,
     rank_ic_report,
     snapshot_counts,
@@ -377,11 +378,20 @@ def _render_term_guide():
     st.markdown("".join(sections), unsafe_allow_html=True)
 def _render_research_dashboard():
     st.subheader("Research / Signal Quality", anchor="research-signal-quality")
+    store = calibration_store_info()
     st.caption(
-        "Every scan is logged locally so the scores can be judged against forward returns. "
-        "Rank IC answers whether a high score actually ranked future winners; the event study "
-        "answers whether fresh ignition triggers beat the cross-section."
+        "Every scan continues to be logged locally, but ordinary analysis is locked to the frozen "
+        f"development sample through {store['cutoff_utc']}. Rank IC answers whether a high score "
+        "ranked future winners; the event study answers whether fresh ignition triggers beat the "
+        "cross-section. Post-cutoff observations remain sealed."
     )
+    if not store["exists"] or not store["verified"]:
+        st.error(
+            "The frozen development database is unavailable or failed its checksum. Research "
+            "fails closed and will not "
+            f"fall back to the live store. Restore it at {store['path']} or set "
+            f"{store['environment_override']}."
+        )
     counts = snapshot_counts()
     col_a, col_b = st.columns(2)
     for col, (table, info) in zip((col_a, col_b), counts.items(), strict=False):
@@ -394,8 +404,8 @@ def _render_research_dashboard():
     ic = rank_ic_report()
     if ic.empty:
         st.info(
-            "No measurable data yet. Leave the app running on the Altcoins page so snapshots "
-            "accumulate - a day of uptime gives a few hundred cross-sections."
+            "No measurable rows are available in the frozen development sample. Live observations "
+            "are intentionally excluded from ordinary analysis."
         )
     else:
         st.dataframe(
@@ -421,7 +431,7 @@ def _render_research_dashboard():
     st.markdown("**Ignition trigger event study** (direction-adjusted, excess vs same-scan cross-section)")
     ev = trigger_event_study()
     if ev.empty:
-        st.info("No fresh triggers with forward snapshots yet.")
+        st.info("No fresh triggers with forward snapshots exist in the frozen development sample.")
     else:
         st.dataframe(
             ev,
@@ -446,8 +456,8 @@ def _render_research_dashboard():
     comp_ic = confluence_component_ic()
     if comp_ic.empty:
         st.info(
-            "No component data yet. Components are logged with each scan; they become "
-            "measurable once veto-active snapshots have forward returns behind them."
+            "No measurable component data exists in the frozen development sample. Post-cutoff "
+            "live observations remain sealed."
         )
     else:
         st.dataframe(
@@ -489,7 +499,10 @@ def _render_research_dashboard():
             )
         else:
             st.caption(f"No weight suggestion yet: {suggestion['reason']} (current weights shown unchanged).")
-    st.caption(f"Store: {RESEARCH_DB_PATH}. CLI report: `py -m perpscanner.research` from the repo root.")
+    st.caption(
+        f"Frozen development store (read-only): {store['path']} · Policy: {store['policy_id']} · "
+        "CLI report: `py -m perpscanner.research` from the repo root."
+    )
 def _set_page(page_name: str):
     st.session_state["app_page"] = page_name
 def _render_glossary_jump():

@@ -1,0 +1,37 @@
+{
+  "policy_version": 1,
+  "policy_id": "binance-perp-scanner-holdout-20260903T120129Z",
+  "status": "enforced",
+  "created_at_utc": "2026-09-03T12:26:55.939353Z",
+  "baseline_commit": "702422d206522fad78789dd1019f11972fb52dba",
+  "baseline_id": "binance-perp-scanner-pre-calibration-20260903T121630Z",
+  "cutoff_utc": "2026-09-03T12:01:29.372069Z",
+  "split_rules": {
+    "development": "scan_ts <= cutoff_utc",
+    "sealed_holdout": "scan_ts > cutoff_utc"
+  },
+  "development_source": {
+    "mode": "sqlite_read_only_immutable",
+    "default_repo_relative_path": "data/calibration/research_snapshots_through_20260903T120129Z.sqlite",
+    "environment_override": "PERPSCANNER_CALIBRATION_DB_PATH",
+    "required_sha256": "e6c1c9bfff325958473abe58c04e1d4a7efbc14f91e67313360b9707633c3126",
+    "sha256_required_before_open": true,
+    "max_scan_ts_utc": "2026-09-03T12:01:29.372069Z"
+  },
+  "live_observation_store": {
+    "repo_relative_path": "data/research_snapshots.sqlite",
+    "write_behavior": "append_only_logging_continues",
+    "post_cutoff_role": "sealed_holdout"
+  },
+  "ordinary_research_reports": {
+    "source": "development_source",
+    "maximum_scan_ts_inclusive": "2026-09-03T12:01:29.372069Z",
+    "post_cutoff_rows_visible": false,
+    "fallback_to_live_store": false
+  },
+  "holdout_access": {
+    "ordinary_report_access": false,
+    "evaluation_workflow_implemented": false,
+    "note": "Opening or evaluating the sealed holdout requires a separate, explicit future task."
+  }
+}

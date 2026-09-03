@@ -767,8 +767,17 @@ class ResearchLoopTests(unittest.TestCase):
         from perpscanner import research
 
         tmpdir = tempfile.TemporaryDirectory()
-        original = research.RESEARCH_DB_PATH
-        research.RESEARCH_DB_PATH = Path(tmpdir.name) / "research.sqlite"
+        original = (
+            research.RESEARCH_DB_PATH,
+            research.RESEARCH_CALIBRATION_DB_PATH,
+            research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+            research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+        )
+        test_db = Path(tmpdir.name) / "research.sqlite"
+        research.RESEARCH_DB_PATH = test_db
+        research.RESEARCH_CALIBRATION_DB_PATH = test_db
+        research.RESEARCH_HOLDOUT_CUTOFF_UTC = "2099-12-31T23:59:59.999999"
+        research.RESEARCH_CALIBRATION_ENFORCE_SHA256 = False
         return research, original, tmpdir
 
     def test_forward_return_frame_uses_later_snapshot(self):
@@ -807,7 +816,12 @@ class ResearchLoopTests(unittest.TestCase):
             counts = research.snapshot_counts()
             self.assertEqual(counts[research.METRIC_TABLE]["rows"], 1)
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def _seed_synthetic_store(self, research):
@@ -861,7 +875,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertAlmostEqual(row["mean_ic"], 1.0, places=6)
             self.assertEqual(row["cross_sections"], 1)
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def test_log_scan_snapshot_migrates_old_table_schema(self):
@@ -885,7 +904,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertEqual(len(stored), 2)
             self.assertIn("momentum_score", stored.columns)
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def _seed_component_store(self, research, cross_sections=35, symbols=8):
@@ -932,7 +956,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertAlmostEqual(by_comp.loc["oi", "mean_ic"], -1.0, places=6)
             self.assertGreaterEqual(by_comp.loc["volume", "cross_sections"], 30)
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def test_suggest_confluence_weights_floors_negative_ic(self):
@@ -949,7 +978,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertEqual(weights["oi"], 0.0)  # negative IC floored out
             self.assertGreater(weights["volume"], weights["basis"])
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def test_suggest_confluence_weights_refuses_thin_data(self):
@@ -962,7 +996,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertFalse(suggestion["ready"])
             self.assertEqual(suggestion["weights"], {k: float(v) for k, v in scanner.CONFLUENCE_WEIGHTS.items()})
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
     def test_trigger_event_study_rewards_winning_long_trigger(self):
@@ -979,7 +1018,12 @@ class ResearchLoopTests(unittest.TestCase):
             self.assertGreater(row["mean_excess_ret"], 0.0)
             self.assertEqual(row["hit_rate"], 1.0)
         finally:
-            research.RESEARCH_DB_PATH = original
+            (
+                research.RESEARCH_DB_PATH,
+                research.RESEARCH_CALIBRATION_DB_PATH,
+                research.RESEARCH_HOLDOUT_CUTOFF_UTC,
+                research.RESEARCH_CALIBRATION_ENFORCE_SHA256,
+            ) = original
             tmpdir.cleanup()
 
 

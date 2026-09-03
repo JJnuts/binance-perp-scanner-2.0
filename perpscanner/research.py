@@ -1,9 +1,10 @@
 """Signal research loop: snapshot logging and forward-return validation.
 
-Logging side: every scored scan is appended to a local SQLite store
-(throttled). Analysis side: forward returns are joined from later
-snapshots of the same store - no extra API calls, no lookahead - and
-turned into per-factor rank ICs and an ignition-trigger event study.
+Logging side: every scored scan is appended to the live SQLite store
+(throttled). Analysis side: ordinary reports read only the frozen,
+immutable development backup through the declared cutoff. Forward returns
+are joined from later development snapshots in that backup - no extra API
+calls, no lookahead, and no access to post-cutoff holdout observations.
 
 Run the report from the repo root:
 
@@ -13,6 +14,7 @@ The report only becomes meaningful once the app has been running (and
 logging) for a while: at ~5-minute snapshots, a day of uptime gives
 ~280 cross-sections.
 """
+import hashlib
 import sqlite3
 from typing import Iterable, Optional
 
@@ -21,9 +23,15 @@ import pandas as pd
 
 from .config import (
     CONFLUENCE_WEIGHTS,
+    RESEARCH_CALIBRATION_DB_ENV,
+    RESEARCH_CALIBRATION_ENFORCE_SHA256,
+    RESEARCH_CALIBRATION_DB_PATH,
+    RESEARCH_CALIBRATION_DB_SHA256,
     RESEARCH_DB_PATH,
     RESEARCH_FACTOR_COLUMNS,
     RESEARCH_HORIZONS_HOURS,
+    RESEARCH_HOLDOUT_CUTOFF_UTC,
+    RESEARCH_HOLDOUT_POLICY_ID,
     RESEARCH_LOG_MIN_INTERVAL_S,
     RESEARCH_LTF_COLUMNS,
     RESEARCH_MIN_GROUP_SIZE,
@@ -45,6 +53,7 @@ CONFLUENCE_COMPONENT_COLUMNS = {
     "taker": "comp_taker_net",
     "basis": "comp_basis_net",
 }
+_CALIBRATION_INTEGRITY_CACHE: dict[tuple[str, int, int, str], bool] = {}
 
 
 def _spearman_corr(left: pd.Series, right: pd.Series) -> float:
@@ -94,8 +103,63 @@ def _newey_west_t_stat(values: Iterable[float], max_lag: int) -> float:
 
 
 def _connect() -> sqlite3.Connection:
+    """Open the live append-only observation store for logging."""
     RESEARCH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(RESEARCH_DB_PATH)
+
+
+def _sha256_file(path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _calibration_store_verified() -> bool:
+    path = RESEARCH_CALIBRATION_DB_PATH
+    if not path.is_file():
+        return False
+    if not RESEARCH_CALIBRATION_ENFORCE_SHA256:
+        return True
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, RESEARCH_CALIBRATION_DB_SHA256)
+    if cache_key not in _CALIBRATION_INTEGRITY_CACHE:
+        _CALIBRATION_INTEGRITY_CACHE.clear()
+        _CALIBRATION_INTEGRITY_CACHE[cache_key] = _sha256_file(path) == RESEARCH_CALIBRATION_DB_SHA256
+    return _CALIBRATION_INTEGRITY_CACHE[cache_key]
+
+
+def _connect_calibration() -> sqlite3.Connection:
+    """Open the frozen development store in SQLite read-only immutable mode."""
+    if not RESEARCH_CALIBRATION_DB_PATH.is_file():
+        raise FileNotFoundError(f"Frozen calibration store not found: {RESEARCH_CALIBRATION_DB_PATH}")
+    if not _calibration_store_verified():
+        raise RuntimeError("Frozen calibration store SHA-256 does not match the holdout policy")
+    uri = f"{RESEARCH_CALIBRATION_DB_PATH.resolve().as_uri()}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def calibration_store_info() -> dict[str, object]:
+    """Describe the enforced source and cutoff used by ordinary reports."""
+    exists = RESEARCH_CALIBRATION_DB_PATH.is_file()
+    return {
+        "policy_id": RESEARCH_HOLDOUT_POLICY_ID,
+        "path": str(RESEARCH_CALIBRATION_DB_PATH),
+        "exists": exists,
+        "verified": _calibration_store_verified() if exists else False,
+        "expected_sha256": RESEARCH_CALIBRATION_DB_SHA256,
+        "sha256_enforced": RESEARCH_CALIBRATION_ENFORCE_SHA256,
+        "cutoff_utc": f"{RESEARCH_HOLDOUT_CUTOFF_UTC}Z",
+        "development_rule": "scan_ts <= cutoff",
+        "sealed_holdout_rule": "scan_ts > cutoff",
+        "read_only": True,
+        "immutable": True,
+        "environment_override": RESEARCH_CALIBRATION_DB_ENV,
+        "fallback_to_live_store": False,
+    }
 
 
 def _last_snapshot_ts(conn: sqlite3.Connection, table: str) -> Optional[pd.Timestamp]:
@@ -168,11 +232,27 @@ def log_scan_snapshot(metrics_df: Optional[pd.DataFrame], ltf_df: Optional[pd.Da
 
 
 def _load_table(table: str) -> pd.DataFrame:
-    if not RESEARCH_DB_PATH.exists():
+    """Load development rows only from the frozen calibration store.
+
+    The SQL boundary is deliberate: even if a wrongly extended copy is
+    supplied, ordinary research still cannot consume rows after the frozen
+    cutoff. A missing calibration store fails closed and never falls back to
+    the live database, whose post-cutoff rows are the sealed holdout.
+    """
+    if table not in {METRIC_TABLE, LTF_TABLE}:
+        raise ValueError(f"Unsupported research table: {table}")
+    if not RESEARCH_CALIBRATION_DB_PATH.is_file():
         return pd.DataFrame()
-    conn = _connect()
     try:
-        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        conn = _connect_calibration()
+    except (FileNotFoundError, RuntimeError, sqlite3.Error):
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql_query(
+            f'SELECT * FROM "{table}" WHERE scan_ts <= ?',
+            conn,
+            params=(RESEARCH_HOLDOUT_CUTOFF_UTC,),
+        )
     except Exception:
         return pd.DataFrame()
     finally:
@@ -436,8 +516,12 @@ def snapshot_counts() -> dict[str, object]:
 
 
 def _print_report() -> None:
+    store = calibration_store_info()
     counts = snapshot_counts()
-    print("Research store:", RESEARCH_DB_PATH)
+    print("Development research store:", store["path"])
+    print("Holdout policy:", store["policy_id"])
+    print("Development cutoff (inclusive):", store["cutoff_utc"])
+    print("Post-cutoff observations: sealed; live-store fallback disabled")
     for table, info in counts.items():
         print(f"  {table}: {info['rows']} rows, {info['cross_sections']} cross-sections ({info['first']} .. {info['last']})")
     ic = rank_ic_report()
