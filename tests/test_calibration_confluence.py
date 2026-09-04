@@ -208,11 +208,15 @@ class ConfluenceCalibrationPrimitiveTests(unittest.TestCase):
 
 class ConfluenceCalibrationOrchestrationTests(unittest.TestCase):
     @staticmethod
-    def _training_frame(episodes=30, symbols=6) -> pd.DataFrame:
+    def _training_frame(
+        episodes=30,
+        symbols=6,
+        start="2026-01-01T00:00:00",
+    ) -> pd.DataFrame:
         rows = []
-        start = pd.Timestamp("2026-01-01T00:00:00")
+        first_timestamp = pd.Timestamp(start)
         for episode in range(episodes):
-            episode_start = start + pd.Timedelta(hours=72 * episode)
+            episode_start = first_timestamp + pd.Timedelta(hours=72 * episode)
             for hour, return_scale in (
                 (0, 0.0),
                 (1, 0.001),
@@ -240,14 +244,28 @@ class ConfluenceCalibrationOrchestrationTests(unittest.TestCase):
         return pd.DataFrame(rows)
 
     @classmethod
-    def _protocol(cls, frame: pd.DataFrame) -> dict:
+    def _protocol(
+        cls,
+        frame: pd.DataFrame,
+        validation_frame: pd.DataFrame | None = None,
+    ) -> dict:
+        validation_ltf = {}
+        validation_complete = False
+        if validation_frame is not None:
+            validation_ltf = {
+                "rows": len(validation_frame),
+                "scans": validation_frame["scan_ts"].nunique(),
+                "symbols": validation_frame["symbol"].nunique(),
+                "veto_rows": len(validation_frame),
+            }
+            validation_complete = True
         return {
             "state": "locked_before_optimization",
             "optimization_performed": False,
             "protected_inputs": {
                 "database": "unused.sqlite",
                 "database_sha256": "0" * 64,
-                "cutoff_inclusive_utc": "2026-04-09T23:59:59Z",
+                "cutoff_inclusive_utc": "2026-07-14T23:59:59Z",
                 "sealed_holdout_accessed": False,
             },
             "partitions": [
@@ -266,12 +284,14 @@ class ConfluenceCalibrationOrchestrationTests(unittest.TestCase):
                 {
                     "name": "internal_validation",
                     "start_inclusive_utc": "2026-04-08T00:00:00Z",
-                    "end_inclusive_utc": "2026-04-08T23:59:59Z",
+                    "end_inclusive_utc": "2026-07-12T23:59:59Z",
+                    "ltf": validation_ltf,
+                    "confluence_fields_complete": validation_complete,
                 },
                 {
                     "name": "locked_confirmation",
-                    "start_inclusive_utc": "2026-04-09T00:00:00Z",
-                    "end_inclusive_utc": "2026-04-09T23:59:59Z",
+                    "start_inclusive_utc": "2026-07-14T00:00:00Z",
+                    "end_inclusive_utc": "2026-07-14T23:59:59Z",
                 },
             ],
             "partition_isolation": {
@@ -288,6 +308,7 @@ class ConfluenceCalibrationOrchestrationTests(unittest.TestCase):
                 "safety_horizon_hours": 24.0,
                 "minimum_cross_sections_per_component_per_horizon_per_partition": 30,
                 "training_objective_delta_minimum": 0.01,
+                "internal_validation_objective_delta_minimum": 0.005,
                 "native_20260903_suggestion_eligible": False,
             },
         }
@@ -407,6 +428,119 @@ class ConfluenceCalibrationOrchestrationTests(unittest.TestCase):
         self.assertTrue(decision.passed)
         self.assertEqual(decision.reasons, ())
         self.assertAlmostEqual(decision.objective_delta, 0.01)
+
+    def test_internal_validation_runner_is_single_candidate_and_partition_locked(self):
+        training = self._training_frame()
+        validation = self._training_frame(start="2026-04-08T00:00:00")
+        locked = self._protocol(training, validation)
+        winner = self._frozen_winner()
+        result = calibration_confluence.run_confluence_internal_validation_stage(
+            locked,
+            validation,
+            winner,
+        )
+        self.assertEqual(result.partition_name, "internal_validation")
+        self.assertEqual(result.baseline.candidate.candidate_id, "baseline")
+        self.assertEqual(
+            result.candidate.candidate.candidate_id,
+            calibration_confluence.FROZEN_CONFLUENCE_WINNER_ID,
+        )
+        self.assertFalse(result.decision.passed)
+        self.assertAlmostEqual(result.decision.objective_delta, 0.0)
+
+        escaped = validation.copy()
+        escaped.loc[escaped.index[-1], "scan_ts"] = pd.Timestamp(
+            "2026-07-14T00:00:00"
+        )
+        with self.assertRaises(calibration_ltf.CalibrationGuardError):
+            calibration_confluence.run_confluence_internal_validation_stage(
+                locked,
+                escaped,
+                winner,
+            )
+
+    def test_internal_validation_rejects_candidate_or_protocol_substitution(self):
+        training = self._training_frame()
+        validation = self._training_frame(start="2026-04-08T00:00:00")
+        locked = self._protocol(training, validation)
+        candidates = calibration_confluence.generate_confluence_candidates(
+            BASELINE,
+            BOUNDS,
+        )
+        substituted = next(
+            item
+            for item in candidates
+            if item.candidate_id == "transfer:expansion->taker:0.10"
+        )
+        with self.assertRaises(calibration_ltf.CalibrationGuardError):
+            calibration_confluence.run_confluence_internal_validation_stage(
+                locked,
+                validation,
+                substituted,
+            )
+
+        changed_gate = self._protocol(training, validation)
+        changed_gate["confluence_experiment"][
+            "internal_validation_objective_delta_minimum"
+        ] = 0.0
+        with self.assertRaises(calibration_ltf.CalibrationGuardError):
+            calibration_confluence.run_confluence_internal_validation_stage(
+                changed_gate,
+                validation,
+                self._frozen_winner(),
+            )
+
+        changed_count = self._protocol(training, validation)
+        changed_count["partitions"][1]["ltf"]["veto_rows"] += 1
+        with self.assertRaises(calibration_ltf.CalibrationGuardError):
+            calibration_confluence.run_confluence_internal_validation_stage(
+                changed_count,
+                validation,
+                self._frozen_winner(),
+            )
+
+    def test_internal_validation_gate_uses_only_locked_objective_delta(self):
+        baseline_candidate = calibration_ltf.WeightCandidate(
+            "baseline", dict(BASELINE), None, None, 0.0
+        )
+        winner = self._frozen_winner()
+        baseline = self._evaluation(baseline_candidate, 0.0, 0.10)
+        exact = self._evaluation(winner, 0.005, -0.50)
+        exact_decision = (
+            calibration_confluence.confluence_internal_validation_decision(
+                baseline,
+                exact,
+            )
+        )
+        self.assertTrue(exact_decision.passed)
+        self.assertEqual(exact_decision.reasons, ())
+        self.assertAlmostEqual(exact_decision.safety_horizon_ic_delta, -0.60)
+
+        below = self._evaluation(winner, 0.0049, 0.50)
+        below_decision = (
+            calibration_confluence.confluence_internal_validation_decision(
+                baseline,
+                below,
+            )
+        )
+        self.assertFalse(below_decision.passed)
+        self.assertEqual(
+            below_decision.reasons,
+            ("objective_delta_below_minimum",),
+        )
+
+    @staticmethod
+    def _frozen_winner() -> calibration_ltf.WeightCandidate:
+        candidates = calibration_confluence.generate_confluence_candidates(
+            BASELINE,
+            BOUNDS,
+        )
+        return next(
+            item
+            for item in candidates
+            if item.candidate_id
+            == calibration_confluence.FROZEN_CONFLUENCE_WINNER_ID
+        )
 
     @staticmethod
     def _evaluation(

@@ -41,6 +41,7 @@ CONFLUENCE_OBJECTIVE_HORIZON_WEIGHTS = {1.0: 0.60, 4.0: 0.40}
 CONFLUENCE_MINIMUM_GROUP_SIZE = 6
 CONFLUENCE_MINIMUM_CROSS_SECTIONS = 30
 CONFLUENCE_TRAINING_OBJECTIVE_DELTA_MINIMUM = 0.01
+CONFLUENCE_INTERNAL_VALIDATION_OBJECTIVE_DELTA_MINIMUM = 0.005
 CONFLUENCE_BASELINE_WEIGHTS = {
     "expansion": 0.30,
     "volume": 0.25,
@@ -54,6 +55,14 @@ CONFLUENCE_WEIGHT_BOUNDS = {
     "oi": (0.05, 0.30),
     "taker": (0.05, 0.30),
     "basis": (0.05, 0.25),
+}
+FROZEN_CONFLUENCE_WINNER_ID = "transfer:expansion->basis:0.10"
+FROZEN_CONFLUENCE_WINNER_WEIGHTS = {
+    "expansion": 0.20,
+    "volume": 0.25,
+    "oi": 0.20,
+    "taker": 0.15,
+    "basis": 0.20,
 }
 
 
@@ -83,6 +92,23 @@ class ConfluenceTrainingStageResult:
     decisions: tuple[ConfluenceTrainingGateDecision, ...]
     winner: ConfluenceCandidateEvaluation | None
     candidate_count: int
+
+
+@dataclass(frozen=True)
+class ConfluenceInternalValidationDecision:
+    candidate_id: str
+    passed: bool
+    reasons: tuple[str, ...]
+    objective_delta: float
+    safety_horizon_ic_delta: float
+
+
+@dataclass(frozen=True)
+class ConfluenceInternalValidationResult:
+    partition_name: str
+    baseline: ConfluenceCandidateEvaluation
+    candidate: ConfluenceCandidateEvaluation
+    decision: ConfluenceInternalValidationDecision
 
 
 def _expected_weight_keys() -> tuple[str, ...]:
@@ -473,21 +499,23 @@ def _utc_naive(value: object, label: str) -> pd.Timestamp:
     return parsed
 
 
-def _assert_confluence_training_frame(
+def _assert_confluence_partition_frame(
     frame: pd.DataFrame,
     partition: Mapping[str, object],
+    *,
+    label: str,
 ) -> pd.DataFrame:
     required = {"scan_ts", "symbol", "veto_side", "price"}
     if frame.empty or not required.issubset(frame.columns):
         raise CalibrationGuardError(
-            "Confluence training frame is empty or lacks required identity columns"
+            f"Confluence {label} frame is empty or lacks required identity columns"
         )
-    start = _utc_naive(partition.get("start_inclusive_utc"), "training start")
-    end = _utc_naive(partition.get("end_inclusive_utc"), "training end")
+    start = _utc_naive(partition.get("start_inclusive_utc"), f"{label} start")
+    end = _utc_naive(partition.get("end_inclusive_utc"), f"{label} end")
     timestamps = pd.to_datetime(frame["scan_ts"], format="ISO8601", errors="coerce")
     if timestamps.isna().any() or (timestamps < start).any() or (timestamps > end).any():
         raise CalibrationGuardError(
-            "Confluence training frame contains rows outside training"
+            f"Confluence {label} frame contains rows outside {label}"
         )
     out = frame.copy()
     out["scan_ts"] = timestamps
@@ -496,6 +524,17 @@ def _assert_confluence_training_frame(
             "Confluence training frame contains duplicate (scan_ts, symbol) rows"
         )
     return out
+
+
+def _assert_confluence_training_frame(
+    frame: pd.DataFrame,
+    partition: Mapping[str, object],
+) -> pd.DataFrame:
+    return _assert_confluence_partition_frame(
+        frame,
+        partition,
+        label="training",
+    )
 
 
 def _locked_confluence_experiment(
@@ -531,6 +570,10 @@ def _locked_confluence_experiment(
         experiment.get("training_objective_delta_minimum", float("nan"))
     ) != CONFLUENCE_TRAINING_OBJECTIVE_DELTA_MINIMUM:
         raise CalibrationGuardError("Locked confluence training gate changed")
+    if float(
+        experiment.get("internal_validation_objective_delta_minimum", float("nan"))
+    ) != CONFLUENCE_INTERNAL_VALIDATION_OBJECTIVE_DELTA_MINIMUM:
+        raise CalibrationGuardError("Locked confluence validation gate changed")
     if experiment.get("native_20260903_suggestion_eligible") is not False:
         raise CalibrationGuardError("Rejected native confluence suggestion became eligible")
     return experiment
@@ -627,4 +670,171 @@ def run_confluence_training_stage(
         decisions=decisions,
         winner=winner,
         candidate_count=len(candidates),
+    )
+
+
+def confluence_internal_validation_decision(
+    baseline: ConfluenceCandidateEvaluation,
+    candidate: ConfluenceCandidateEvaluation,
+    *,
+    objective_delta_minimum: float = (
+        CONFLUENCE_INTERNAL_VALIDATION_OBJECTIVE_DELTA_MINIMUM
+    ),
+    safety_horizon: float = 24.0,
+) -> ConfluenceInternalValidationDecision:
+    """Apply the sole numeric gate locked for confluence validation."""
+
+    if candidate.candidate.candidate_id == "baseline":
+        raise CalibrationGuardError("Baseline cannot validate itself")
+    minimum = float(objective_delta_minimum)
+    if not math.isfinite(minimum):
+        raise CalibrationGuardError("Confluence validation objective gate must be finite")
+    horizon = float(safety_horizon)
+    if horizon not in baseline.mean_ic_by_horizon or horizon not in candidate.mean_ic_by_horizon:
+        raise CalibrationGuardError("Confluence validation safety IC is missing")
+    objective_delta = float(candidate.objective_ic - baseline.objective_ic)
+    safety_delta = float(
+        candidate.mean_ic_by_horizon[horizon] - baseline.mean_ic_by_horizon[horizon]
+    )
+    if not math.isfinite(objective_delta) or not math.isfinite(safety_delta):
+        raise CalibrationGuardError("Confluence validation deltas must be finite")
+    reasons = () if objective_delta >= minimum else ("objective_delta_below_minimum",)
+    return ConfluenceInternalValidationDecision(
+        candidate_id=candidate.candidate.candidate_id,
+        passed=not reasons,
+        reasons=reasons,
+        objective_delta=objective_delta,
+        safety_horizon_ic_delta=safety_delta,
+    )
+
+
+def _validate_frozen_confluence_winner(
+    candidate: WeightCandidate,
+    experiment: Mapping[str, object],
+) -> WeightCandidate:
+    generated = {
+        item.candidate_id: item
+        for item in generate_confluence_candidates(
+            experiment["baseline_weights"],
+            experiment["bounds"],
+        )
+    }
+    expected = generated.get(FROZEN_CONFLUENCE_WINNER_ID)
+    if expected is None or expected.weights != FROZEN_CONFLUENCE_WINNER_WEIGHTS:
+        raise CalibrationGuardError("Frozen confluence winner is absent from locked grid")
+    if candidate != expected:
+        raise CalibrationGuardError("Validation candidate is not the frozen training winner")
+    return expected
+
+
+def run_confluence_internal_validation_stage(
+    protocol: Mapping[str, object],
+    ltf_frame: pd.DataFrame,
+    candidate: WeightCandidate,
+) -> ConfluenceInternalValidationResult:
+    """Evaluate only baseline and the frozen winner on internal validation."""
+
+    partition = resolve_partition(
+        protocol,
+        "internal_validation",
+        purpose="internal_validation",
+    )
+    validation = _assert_confluence_partition_frame(
+        ltf_frame,
+        partition,
+        label="internal validation",
+    )
+    expected_ltf = partition.get("ltf")
+    if not isinstance(expected_ltf, Mapping):
+        raise CalibrationGuardError("Protocol has no locked validation LTF counts")
+    observed = {
+        "rows": len(validation),
+        "scans": validation["scan_ts"].nunique(),
+        "symbols": validation["symbol"].nunique(),
+        "veto_rows": int(validation["veto_side"].isin(["Long", "Short"]).sum()),
+    }
+    for key, value in observed.items():
+        if key not in expected_ltf or int(expected_ltf[key]) != int(value):
+            raise CalibrationGuardError(
+                f"Confluence validation frame does not match locked {key} count"
+            )
+    if partition.get("confluence_fields_complete") is not True:
+        raise CalibrationGuardError(
+            "Locked validation partition lacks confluence completeness"
+        )
+
+    experiment = _locked_confluence_experiment(protocol)
+    frozen_candidate = _validate_frozen_confluence_winner(candidate, experiment)
+    baseline_candidate = WeightCandidate(
+        "baseline",
+        dict(experiment["baseline_weights"]),
+        None,
+        None,
+        0.0,
+    )
+    isolation = protocol.get("partition_isolation")
+    if not isinstance(isolation, Mapping):
+        raise CalibrationGuardError("Protocol has no partition-isolation rules")
+    locked_horizons = tuple(
+        float(value) for value in isolation.get("forward_horizons_hours", ())
+    )
+    if locked_horizons != CONFLUENCE_EVALUATION_HORIZONS:
+        raise CalibrationGuardError("Locked confluence forward horizons changed")
+    tolerance_fraction = float(
+        isolation.get("forward_join_tolerance_fraction", float("nan"))
+    )
+    if not math.isfinite(tolerance_fraction) or tolerance_fraction < 0.0:
+        raise CalibrationGuardError("Invalid confluence forward-label tolerance")
+    prices = validation[["scan_ts", "symbol", "price"]]
+    forward_by_horizon = {
+        horizon: build_protocol_partition_forward_returns(
+            prices,
+            horizon,
+            protocol,
+            "internal_validation",
+            purpose="internal_validation",
+            tolerance_fraction=tolerance_fraction,
+        )
+        for horizon in CONFLUENCE_EVALUATION_HORIZONS
+    }
+    directional = directionalize_confluence_frame(validation)
+    component_reports = _build_component_reports_by_horizon(
+        directional,
+        forward_by_horizon,
+        evaluation_horizons=CONFLUENCE_EVALUATION_HORIZONS,
+        minimum_group_size=CONFLUENCE_MINIMUM_GROUP_SIZE,
+        minimum_cross_sections=CONFLUENCE_MINIMUM_CROSS_SECTIONS,
+    )
+    baseline = _evaluate_confluence_candidate_with_component_reports(
+        validation,
+        forward_by_horizon,
+        baseline_candidate,
+        component_reports,
+        objective_horizon_weights=CONFLUENCE_OBJECTIVE_HORIZON_WEIGHTS,
+        evaluation_horizons=CONFLUENCE_EVALUATION_HORIZONS,
+        minimum_group_size=CONFLUENCE_MINIMUM_GROUP_SIZE,
+        minimum_cross_sections=CONFLUENCE_MINIMUM_CROSS_SECTIONS,
+    )
+    evaluated_candidate = _evaluate_confluence_candidate_with_component_reports(
+        validation,
+        forward_by_horizon,
+        frozen_candidate,
+        component_reports,
+        objective_horizon_weights=CONFLUENCE_OBJECTIVE_HORIZON_WEIGHTS,
+        evaluation_horizons=CONFLUENCE_EVALUATION_HORIZONS,
+        minimum_group_size=CONFLUENCE_MINIMUM_GROUP_SIZE,
+        minimum_cross_sections=CONFLUENCE_MINIMUM_CROSS_SECTIONS,
+    )
+    decision = confluence_internal_validation_decision(
+        baseline,
+        evaluated_candidate,
+        objective_delta_minimum=float(
+            experiment["internal_validation_objective_delta_minimum"]
+        ),
+    )
+    return ConfluenceInternalValidationResult(
+        partition_name="internal_validation",
+        baseline=baseline,
+        candidate=evaluated_candidate,
+        decision=decision,
     )
