@@ -573,17 +573,29 @@ def build_ltf_regime_metrics(
     out["tf_alignment_pass"] = out["tf_alignment_score"] >= MIN_TF_ALIGNMENT
     out["fresh_setup_pass"] = out["bars_since_trigger"] <= MAX_BEST_SETUP_TRIGGER_BARS
     return out.sort_values(["ltf_ignition_score", "volume_zscore", "oi_zscore"], ascending=False).reset_index(drop=True)
-def _build_best_setups(ltf_df: pd.DataFrame, htf_df: pd.DataFrame) -> pd.DataFrame:
+def _build_best_setups(
+    ltf_df: pd.DataFrame,
+    htf_df: pd.DataFrame,
+    *,
+    require_fresh: bool = True,
+) -> pd.DataFrame:
+    """Build the existing LTF/HTF best-setup blend.
+
+    The dashboard keeps the historical default of requiring a fresh LTF
+    trigger.  Alert lifecycle evaluation can explicitly retain otherwise
+    identical, still-aligned rows after trigger freshness expires so a setup
+    can be revalidated before a reminder.  The score construction and setup
+    labels are shared and unchanged in both modes.
+    """
     if ltf_df.empty or htf_df.empty:
         return pd.DataFrame()
 
     required_cols = {"tf_alignment_pass", "fresh_setup_pass", "ltf_direction"}
     if required_cols.issubset(ltf_df.columns):
-        ltf_df = ltf_df[
-            ltf_df["tf_alignment_pass"]
-            & ltf_df["fresh_setup_pass"]
-            & ltf_df["ltf_direction"].isin(["Long", "Short"])
-        ].copy()
+        eligible = ltf_df["tf_alignment_pass"] & ltf_df["ltf_direction"].isin(["Long", "Short"])
+        if require_fresh:
+            eligible = eligible & ltf_df["fresh_setup_pass"]
+        ltf_df = ltf_df[eligible].copy()
         if ltf_df.empty:
             return ltf_df
 
